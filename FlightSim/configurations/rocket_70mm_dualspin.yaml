@@ -1,0 +1,75 @@
+# rocket_70mm_dualspin.yaml
+# Konfiguracja dual-spin bazująca na danych rzeczywistej rakiety 70mm
+# Łożysko na 40% długości od nosa (x=0.514m)
+
+body:
+  length:       1.285
+  diameter:     0.070
+  nose:
+    type:   ogive
+    length: 0.225
+  boattail:
+    diameter: 0.052
+    length:   0.044
+    type:     cone
+
+mass:
+  xcg_ref:  0.710
+
+mass_model:
+  full:
+    mass:   4.200
+    xcg:    0.773
+    Iyy:    0.646
+    Ixx:    0.0032
+  empty:
+    mass:   3.430
+    xcg:    0.710
+    Iyy:    0.532
+    Ixx:    0.0028
+
+propulsion:
+  thrust_profile:
+    - [0.000,  700.0]   # zapłon — pełny ciąg
+    - [1.800,  1500.0]   # koniec spalania
+  nozzle_diameter: 0.040
+
+flight_conditions:
+  mach:  [0.3, 0.6, 0.9, 1.1, 1.4, 2.0]
+  alpha: [-10.0, -8.0, -6.0, -4.0, -2.0,
+           0.0, 2.0, 4.0, 6.0, 8.0, 10.0]
+  altitude: 1000.0
+
+fins:
+  - name: main_fins
+    count:        4         # liczba płetw
+    position:     1.160     # x pozycji natarcia nasady od nosa [m]
+    span:         0.0575    # rozpiętość (od korpusu do końca) [m]
+    root_chord:   0.120     # cięciwa nasady [m]
+    tip_chord:    0.081     # cięciwa końca [m]
+    sweep_le:     35.0      # kąt skosu krawędzi natarcia [deg]
+    cant_angle:   1.2       # kąt zaklinowania płetw [deg]
+    thickness:    0.002     # grubość płetwy [m]
+    profile:      hex       # hex | naca | wedge
+
+dual_spin:
+  enabled: true
+
+  # Łożysko na 40% długości = 0.514m od nosa
+  bearing_x:        0.514
+  bearing_friction: 0.0      # idealne łożysko
+
+  # Sekcja przednia (0 → 0.514m) — nos + głowica
+  # ~35% masy całkowitej, brak canardów na razie
+  forward:
+    mass:  1.470             # ~35% * 4.200 kg
+    Ixx:   0.0005            # szacunek — mała sekcja bez silnika
+    xcg:   0.257             # środek sekcji przedniej
+    Clp:   0.0               # brak canardów → brak tłumienia roll
+
+  # Sekcja tylna (0.514m → 1.285m) — kadłub + silnik + stateczniki
+  # ~65% masy całkowitej
+  aft:
+    mass:  2.730             # ~65% * 4.200 kg
+    Ixx:   0.0027            # Ixx_total - Ixx_fwd = 0.0032 - 0.0005
+    xcg:   0.900             # środek sekcji tylnej

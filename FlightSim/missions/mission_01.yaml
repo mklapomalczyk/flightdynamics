@@ -1,0 +1,15 @@
+# missions/mission_01.yaml
+# ========================
+# Parametry misji — niezależne od konfiguracji rakiety.
+# Jedna rakieta może być użyta w wielu misjach.
+
+name: mission_01
+
+# ---- Wyrzutnia -------------------------------------------------------- #
+launcher:
+  latitude:   51.417184    # szerokość geograficzna [deg N]
+  longitude:  15.526644    # długość geograficzna [deg E]
+  altitude:   100.0      # wysokość nad poziomem morza [m]
+
+  azimuth:    336.0       # azymut strzału [deg], 0=N, 90=E, 180=S, 270=W
+  elevation:  45.0       # kąt elewacji [deg], 0=poziomo, 90=pionowo

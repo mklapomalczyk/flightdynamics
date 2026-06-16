@@ -1,0 +1,737 @@
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS     
+
+    CONERR - INPUT ERROR CHECKING
+
+    ERROR CODES - N* DENOTES THE NUMBER OF OCCURENCES OF EACH ERROR
+    A - UNKNOWN VARIABLE NAME
+    B - MISSING EQUAL SIGN FOLLOWING VARIABLE NAME
+    C - NON-ARRAY VARIABLE HAS AN ARRAY ELEMENTDESIGNATION - (N)
+    D - NON-ARRAY VARIABLE HAS MULTIPLE VALUES ASSIGNED
+    E - ASSIGNED VALUES EXCEED ARRAY DIMENSION
+    F - SYNTAX ERROR
+
+    ************************* INPUT DATA CARDS *************************
+
+   1 DIM M                                                                           
+      2 ** BLANK CARD - IGNORED
+   3  $FLTCON  NALPHA=11.,NMACH=6.,                                                  
+   4           MACH=0.3000,0.6000,0.9000,1.1000,1.4000,2.0000,                       
+   5           ALPHA=-10.0,-8.0,-6.0,-4.0,-2.0,0.0,2.0,4.0,6.0,8.0,10.0,$            
+      6 ** BLANK CARD - IGNORED
+   7  $REFQ    XCG=0.7100,                                                           
+   8           SREF=0.0038485,                                                       
+   9           LREF=1.2850,                                                          
+  10           RHR=0.,$                                                              
+     11 ** BLANK CARD - IGNORED
+  12  $AXIBOD  X0=0.00,                                                              
+  13           TNOSE=OGIVE,                                                          
+               ** SUBSTITUTING NUMERIC FOR NAME OGIVE
+  14           LNOSE=0.2250,                                                         
+  15           DNOSE=0.0700,                                                         
+  16           BNOSE=0.0,                                                            
+  17           TRUNC=.FALSE.,                                                        
+  18           LCENTR=1.0160,                                                        
+  19           DCENTR=0.0700,                                                        
+  20           TAFT=CONE,                                                            
+               ** SUBSTITUTING NUMERIC FOR NAME CONE
+  21           LAFT=0.0440,                                                          
+  22           DAFT=0.0520,                                                          
+  23           DEXIT=0.0000,$                                                        
+     24 ** BLANK CARD - IGNORED
+  25 PART                                                                            
+  26 NEXT CASE                                                                       
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE   1
+    CASE INPUTS
+    FOLLOWING ARE THE CARDS INPUT FOR THIS CASE
+
+ DIM M                                                                           
+  $FLTCON  NALPHA=11.,NMACH=6.,                                                  
+           MACH=0.3000,0.6000,0.9000,1.1000,1.4000,2.0000,                       
+           ALPHA=-10.0,-8.0,-6.0,-4.0,-2.0,0.0,2.0,4.0,6.0,8.0,10.0,$            
+  $REFQ    XCG=0.7100,                                                           
+           SREF=0.0038485,                                                       
+           LREF=1.2850,                                                          
+           RHR=0.,$                                                              
+  $AXIBOD  X0=0.00,                                                              
+           TNOSE=1.,                                                             
+           LNOSE=0.2250,                                                         
+           DNOSE=0.0700,                                                         
+           BNOSE=0.0,                                                            
+           TRUNC=.FALSE.,                                                        
+           LCENTR=1.0160,                                                        
+           DCENTR=0.0700,                                                        
+           TAFT=0.,                                                              
+           LAFT=0.0440,                                                          
+           DAFT=0.0520,                                                          
+           DEXIT=0.0000,$                                                        
+ PART                                                                            
+ NEXT CASE                                                                       
+    * WARNING * THE REYNOLDS NUMBER IS NOT DEFINED, FOR INPUT SPEED  1
+                SEA LEVEL ALTITUDE ASSUMED
+    * WARNING * THE REYNOLDS NUMBER IS NOT DEFINED, FOR INPUT SPEED  2
+                SEA LEVEL ALTITUDE ASSUMED
+    * WARNING * THE REYNOLDS NUMBER IS NOT DEFINED, FOR INPUT SPEED  3
+                SEA LEVEL ALTITUDE ASSUMED
+    * WARNING * THE REYNOLDS NUMBER IS NOT DEFINED, FOR INPUT SPEED  4
+                SEA LEVEL ALTITUDE ASSUMED
+    * WARNING * THE REYNOLDS NUMBER IS NOT DEFINED, FOR INPUT SPEED  5
+                SEA LEVEL ALTITUDE ASSUMED
+    * WARNING * THE REYNOLDS NUMBER IS NOT DEFINED, FOR INPUT SPEED  6
+                SEA LEVEL ALTITUDE ASSUMED
+    THE BOUNDARY LAYER IS ASSUMED TO BE TURBULENT
+    THE INPUT UNITS ARE IN METERS, THE SCALE FACTOR IS   1.0000
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE   2
+                        AXISYMMETRIC BODY DEFINITION
+
+                             NOSE   CENTERBODY     AFT BODY        TOTAL
+    SHAPE                   OGIVE     CYLINDER        CONIC
+    LENGTH                  0.225        1.016        0.044        1.285   M
+    FINENESS RATIO          3.214       14.514        0.629       18.357
+    PLANFORM AREA           0.011        0.071        0.003        0.084   M**2
+    AREA CENTROID           0.140        0.733        1.262        0.676   M
+    WETTED AREA             0.033        0.223        0.009        0.265   M**2
+    VOLUME                  0.000        0.004        0.000        0.005   M**3
+    VOL. CENTROID           0.154        0.733        1.261        0.688   M
+
+                              MOLD LINE CONTOUR
+
+     LONGITUDINAL STATIONS    0.0000     0.0225     0.0450     0.0675     0.0900 
+        0.1125     0.1350     0.1575     0.1800     0.2025     0.2250     0.3266 
+        0.4282     0.5298     0.6314     0.7330     0.8346     0.9362     1.0378 
+        1.1394     1.2410*    1.2454     1.2498     1.2542     1.2586     1.2630 
+        1.2674     1.2718     1.2762     1.2806     1.2850*
+
+                BODY RADII    0.0000     0.0068     0.0128     0.0181     0.0226 
+        0.0264     0.0295     0.0319     0.0336     0.0347     0.0350     0.0350 
+        0.0350     0.0350     0.0350     0.0350     0.0350     0.0350     0.0350 
+        0.0350     0.0350*    0.0341     0.0332     0.0323     0.0314     0.0305 
+        0.0296     0.0287     0.0278     0.0269     0.0260*
+    NOTE - * INDICATES SLOPE DISCONTINUOUS POINTS
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE   3
+                             BODY ALONE PARTIAL OUTPUT
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       0.30                REYNOLDS NO = 6.955E+06 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE =   6383.49 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+      ALPHA    CA-FRIC  CA-PRES/WAVE CA-BASE    CA-PROT     CA-SEP     CA-ALP
+     -10.00     0.2031     0.0572     0.0561                           0.0022
+      -8.00     0.2054     0.0578     0.0562                           0.0019
+      -6.00     0.2071     0.0583     0.0563                           0.0013
+      -4.00     0.2084     0.0587     0.0563                           0.0006
+      -2.00     0.2092     0.0589     0.0563                           0.0002
+       0.00     0.2094     0.0589     0.0562                           0.0000
+       2.00     0.2092     0.0589     0.0563                           0.0002
+       4.00     0.2084     0.0587     0.0563                           0.0006
+       6.00     0.2071     0.0583     0.0563                           0.0013
+       8.00     0.2054     0.0578     0.0562                           0.0019
+      10.00     0.2031     0.0572     0.0561                           0.0022
+
+                     CROSS FLOW DRAG PROPORTIONALITY FACTOR = 0.76155
+
+      ALPHA    CN-POTEN  CN-VISC   CN-SEP    CM-POTEN  CM-VISC   CM-SEP    CDC
+     -10.00    -0.359    -0.389              -0.174    -0.010             0.772
+      -8.00    -0.289    -0.248              -0.140    -0.007             0.766
+      -6.00    -0.219    -0.138              -0.106    -0.004             0.759
+      -4.00    -0.146    -0.061              -0.071    -0.002             0.753
+      -2.00    -0.073    -0.015              -0.036     0.000             0.746
+       0.00     0.000     0.000               0.000     0.000             0.740
+       2.00     0.073     0.015               0.036     0.000             0.746
+       4.00     0.146     0.061               0.071     0.002             0.753
+       6.00     0.219     0.138               0.106     0.004             0.759
+       8.00     0.289     0.248               0.140     0.007             0.766
+      10.00     0.359     0.389               0.174     0.010             0.772
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE   4
+                     STATIC AERODYNAMICS FOR BODY ALONE
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       0.30                REYNOLDS NO = 6.955E+06 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE =   6383.49 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+                   ----- LONGITUDINAL -----     -- LATERAL DIRECTIONAL --
+         ALPHA       CN        CM        CA        CY       CLN       CLL
+
+        -10.00    -0.747    -0.184     0.319     0.000     0.000     0.000
+         -8.00    -0.537    -0.147     0.321     0.000     0.000     0.000
+         -6.00    -0.357    -0.110     0.323     0.000     0.000     0.000
+         -4.00    -0.208    -0.073     0.324     0.000     0.000     0.000
+         -2.00    -0.089    -0.036     0.324     0.000     0.000     0.000
+          0.00     0.000     0.000     0.325     0.000     0.000     0.000
+          2.00     0.089     0.036     0.324     0.000     0.000     0.000
+          4.00     0.208     0.073     0.324     0.000     0.000     0.000
+          6.00     0.357     0.110     0.323     0.000     0.000     0.000
+          8.00     0.537     0.147     0.321     0.000     0.000     0.000
+         10.00     0.747     0.184     0.319     0.000     0.000     0.000
+
+         ALPHA       CL        CD      CL/CD     X-C.P.
+
+        -10.00    -0.681     0.443    -1.535     0.247
+         -8.00    -0.487     0.393    -1.240     0.274
+         -6.00    -0.321     0.359    -0.896     0.307
+         -4.00    -0.184     0.338    -0.546     0.350
+         -2.00    -0.077     0.327    -0.236     0.406
+          0.00     0.000     0.325     0.000     0.406
+          2.00     0.077     0.327     0.236     0.406
+          4.00     0.184     0.338     0.546     0.350
+          6.00     0.321     0.359     0.896     0.307
+          8.00     0.487     0.393     1.240     0.274
+         10.00     0.681     0.443     1.535     0.247
+
+    X-C.P. MEAS. FROM MOMENT CENTER IN REF. LENGTHS, NEG. AFT OF MOMENT CENTER
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE   5
+                     STATIC AERODYNAMICS FOR BODY ALONE
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       0.30                REYNOLDS NO = 6.955E+06 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE =   6383.49 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+                   ---------- DERIVATIVES (PER DEGREE) ----------
+         ALPHA       CNA         CMA         CYB         CLNB        CLLB
+        -10.00      0.1127      0.0187     -0.0741     -0.0182      0.0000
+         -8.00      0.0975      0.0186     -0.0669     -0.0182      0.0000
+         -6.00      0.0824      0.0186     -0.0596     -0.0182      0.0000
+         -4.00      0.0671      0.0184     -0.0523     -0.0181      0.0000
+         -2.00      0.0519      0.0182     -0.0452     -0.0180      0.0000
+          0.00      0.0443      0.0180     -0.0424     -0.0180      0.0000
+          2.00      0.0519      0.0182     -0.0452     -0.0180      0.0000
+          4.00      0.0671      0.0184     -0.0523     -0.0181      0.0000
+          6.00      0.0824      0.0186     -0.0596     -0.0182      0.0000
+          8.00      0.0975      0.0186     -0.0669     -0.0182      0.0000
+         10.00      0.1127      0.0187     -0.0741     -0.0182      0.0000
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE   6
+                             BODY ALONE PARTIAL OUTPUT
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       0.60                REYNOLDS NO = 1.391E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE =  25533.94 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+      ALPHA    CA-FRIC  CA-PRES/WAVE CA-BASE    CA-PROT     CA-SEP     CA-ALP
+     -10.00     0.1785     0.0577     0.0556                           0.0018
+      -8.00     0.1805     0.0584     0.0558                           0.0017
+      -6.00     0.1821     0.0589     0.0559                           0.0011
+      -4.00     0.1832     0.0592     0.0559                           0.0006
+      -2.00     0.1839     0.0595     0.0559                           0.0001
+       0.00     0.1841     0.0595     0.0558                           0.0000
+       2.00     0.1839     0.0595     0.0559                           0.0001
+       4.00     0.1832     0.0592     0.0559                           0.0006
+       6.00     0.1821     0.0589     0.0559                           0.0011
+       8.00     0.1805     0.0584     0.0558                           0.0017
+      10.00     0.1785     0.0577     0.0556                           0.0018
+
+                     CROSS FLOW DRAG PROPORTIONALITY FACTOR = 0.76155
+
+      ALPHA    CN-POTEN  CN-VISC   CN-SEP    CM-POTEN  CM-VISC   CM-SEP    CDC
+     -10.00    -0.337    -0.405              -0.183    -0.011             0.804
+      -8.00    -0.272    -0.256              -0.148    -0.007             0.791
+      -6.00    -0.205    -0.142              -0.112    -0.004             0.778
+      -4.00    -0.138    -0.062              -0.075    -0.002             0.766
+      -2.00    -0.069    -0.015              -0.037     0.000             0.753
+       0.00     0.000     0.000               0.000     0.000             0.740
+       2.00     0.069     0.015               0.037     0.000             0.753
+       4.00     0.138     0.062               0.075     0.002             0.766
+       6.00     0.205     0.142               0.112     0.004             0.778
+       8.00     0.272     0.256               0.148     0.007             0.791
+      10.00     0.337     0.405               0.183     0.011             0.804
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE   7
+                     STATIC AERODYNAMICS FOR BODY ALONE
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       0.60                REYNOLDS NO = 1.391E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE =  25533.94 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+                   ----- LONGITUDINAL -----     -- LATERAL DIRECTIONAL --
+         ALPHA       CN        CM        CA        CY       CLN       CLL
+
+        -10.00    -0.742    -0.194     0.294     0.000     0.000     0.000
+         -8.00    -0.528    -0.155     0.296     0.000     0.000     0.000
+         -6.00    -0.347    -0.115     0.298     0.000     0.000     0.000
+         -4.00    -0.200    -0.076     0.299     0.000     0.000     0.000
+         -2.00    -0.084    -0.038     0.299     0.000     0.000     0.000
+          0.00     0.000     0.000     0.299     0.000     0.000     0.000
+          2.00     0.084     0.038     0.299     0.000     0.000     0.000
+          4.00     0.200     0.076     0.299     0.000     0.000     0.000
+          6.00     0.347     0.115     0.298     0.000     0.000     0.000
+          8.00     0.528     0.155     0.296     0.000     0.000     0.000
+         10.00     0.742     0.194     0.294     0.000     0.000     0.000
+
+         ALPHA       CL        CD      CL/CD     X-C.P.
+
+        -10.00    -0.680     0.418    -1.625     0.261
+         -8.00    -0.482     0.367    -1.312     0.293
+         -6.00    -0.314     0.333    -0.945     0.332
+         -4.00    -0.178     0.312    -0.572     0.382
+         -2.00    -0.074     0.302    -0.244     0.449
+          0.00     0.000     0.299     0.000     0.449
+          2.00     0.074     0.302     0.244     0.449
+          4.00     0.178     0.312     0.572     0.382
+          6.00     0.314     0.333     0.945     0.332
+          8.00     0.482     0.367     1.312     0.293
+         10.00     0.680     0.418     1.625     0.261
+
+    X-C.P. MEAS. FROM MOMENT CENTER IN REF. LENGTHS, NEG. AFT OF MOMENT CENTER
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE   8
+                     STATIC AERODYNAMICS FOR BODY ALONE
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       0.60                REYNOLDS NO = 1.391E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE =  25533.94 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+                   ---------- DERIVATIVES (PER DEGREE) ----------
+         ALPHA       CNA         CMA         CYB         CLNB        CLLB
+        -10.00      0.1153      0.0197     -0.0736     -0.0192      0.0000
+         -8.00      0.0986      0.0196     -0.0658     -0.0192      0.0000
+         -6.00      0.0820      0.0195     -0.0580     -0.0192      0.0000
+         -4.00      0.0658      0.0194     -0.0504     -0.0191      0.0000
+         -2.00      0.0500      0.0191     -0.0431     -0.0190      0.0000
+          0.00      0.0422      0.0189     -0.0402     -0.0189      0.0000
+          2.00      0.0500      0.0191     -0.0431     -0.0190      0.0000
+          4.00      0.0658      0.0194     -0.0504     -0.0191      0.0000
+          6.00      0.0820      0.0195     -0.0580     -0.0192      0.0000
+          8.00      0.0986      0.0196     -0.0658     -0.0192      0.0000
+         10.00      0.1153      0.0197     -0.0736     -0.0192      0.0000
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE   9
+                             BODY ALONE PARTIAL OUTPUT
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       0.90                REYNOLDS NO = 2.087E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE =  57451.37 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+      ALPHA    CA-FRIC  CA-PRES/WAVE CA-BASE    CA-PROT     CA-SEP     CA-ALP
+     -10.00     0.1629     0.1009     0.0539                           0.0025
+      -8.00     0.1647     0.1021     0.0541                           0.0021
+      -6.00     0.1661     0.1029     0.0542                           0.0013
+      -4.00     0.1671     0.1036     0.0542                           0.0006
+      -2.00     0.1677     0.1040     0.0542                           0.0002
+       0.00     0.1679     0.1041     0.0541                           0.0000
+       2.00     0.1677     0.1040     0.0542                           0.0002
+       4.00     0.1671     0.1036     0.0542                           0.0006
+       6.00     0.1661     0.1029     0.0542                           0.0013
+       8.00     0.1647     0.1021     0.0541                           0.0021
+      10.00     0.1629     0.1009     0.0539                           0.0025
+
+                     CROSS FLOW DRAG PROPORTIONALITY FACTOR = 0.76398
+
+      ALPHA    CN-POTEN  CN-VISC   CN-SEP    CM-POTEN  CM-VISC   CM-SEP    CDC
+     -10.00    -0.212    -0.422              -0.242    -0.011             0.836
+      -8.00    -0.171    -0.265              -0.195    -0.007             0.817
+      -6.00    -0.129    -0.146              -0.148    -0.004             0.798
+      -4.00    -0.087    -0.063              -0.099    -0.002             0.778
+      -2.00    -0.043    -0.015              -0.050     0.000             0.759
+       0.00     0.000     0.000               0.000     0.000             0.740
+       2.00     0.043     0.015               0.050     0.000             0.759
+       4.00     0.087     0.063               0.099     0.002             0.778
+       6.00     0.129     0.146               0.148     0.004             0.798
+       8.00     0.171     0.265               0.195     0.007             0.817
+      10.00     0.212     0.422               0.242     0.011             0.836
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE  10
+                     STATIC AERODYNAMICS FOR BODY ALONE
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       0.90                REYNOLDS NO = 2.087E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE =  57451.37 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+                   ----- LONGITUDINAL -----     -- LATERAL DIRECTIONAL --
+         ALPHA       CN        CM        CA        CY       CLN       CLL
+
+        -10.00    -0.634    -0.253     0.320     0.000     0.000     0.000
+         -8.00    -0.436    -0.203     0.323     0.000     0.000     0.000
+         -6.00    -0.275    -0.151     0.325     0.000     0.000     0.000
+         -4.00    -0.150    -0.101     0.326     0.000     0.000     0.000
+         -2.00    -0.059    -0.050     0.326     0.000     0.000     0.000
+          0.00     0.000     0.000     0.326     0.000     0.000     0.000
+          2.00     0.059     0.050     0.326     0.000     0.000     0.000
+          4.00     0.150     0.101     0.326     0.000     0.000     0.000
+          6.00     0.275     0.151     0.325     0.000     0.000     0.000
+          8.00     0.436     0.203     0.323     0.000     0.000     0.000
+         10.00     0.634     0.253     0.320     0.000     0.000     0.000
+
+         ALPHA       CL        CD      CL/CD     X-C.P.
+
+        -10.00    -0.569     0.426    -1.337     0.400
+         -8.00    -0.387     0.380    -1.017     0.464
+         -6.00    -0.240     0.352    -0.682     0.550
+         -4.00    -0.127     0.335    -0.379     0.670
+         -2.00    -0.047     0.328    -0.145     0.849
+          0.00     0.000     0.326     0.000     0.849
+          2.00     0.047     0.328     0.145     0.849
+          4.00     0.127     0.335     0.379     0.670
+          6.00     0.240     0.352     0.682     0.550
+          8.00     0.387     0.380     1.017     0.464
+         10.00     0.569     0.426     1.337     0.400
+
+    X-C.P. MEAS. FROM MOMENT CENTER IN REF. LENGTHS, NEG. AFT OF MOMENT CENTER
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE  11
+                     STATIC AERODYNAMICS FOR BODY ALONE
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       0.90                REYNOLDS NO = 2.087E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE =  57451.37 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+                   ---------- DERIVATIVES (PER DEGREE) ----------
+         ALPHA       CNA         CMA         CYB         CLNB        CLLB
+        -10.00      0.1083      0.0254     -0.0630     -0.0251      0.0000
+         -8.00      0.0897      0.0255     -0.0544     -0.0252      0.0000
+         -6.00      0.0715      0.0255     -0.0460     -0.0252      0.0000
+         -4.00      0.0541      0.0254     -0.0380     -0.0251      0.0000
+         -2.00      0.0375      0.0251     -0.0304     -0.0250      0.0000
+          0.00      0.0295      0.0250     -0.0274     -0.0250      0.0000
+          2.00      0.0375      0.0251     -0.0304     -0.0250      0.0000
+          4.00      0.0541      0.0254     -0.0380     -0.0251      0.0000
+          6.00      0.0715      0.0255     -0.0460     -0.0252      0.0000
+          8.00      0.0897      0.0255     -0.0544     -0.0252      0.0000
+         10.00      0.1083      0.0254     -0.0630     -0.0251      0.0000
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE  12
+                             BODY ALONE PARTIAL OUTPUT
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       1.10                REYNOLDS NO = 2.550E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE =  85822.41 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+      ALPHA    CA-FRIC  CA-PRES/WAVE CA-BASE    CA-PROT     CA-SEP     CA-ALP
+     -10.00     0.1541     0.2175     0.0825                           0.0036
+      -8.00     0.1558     0.2199     0.0829                           0.0029
+      -6.00     0.1572     0.2218     0.0831                           0.0019
+      -4.00     0.1581     0.2232     0.0832                           0.0009
+      -2.00     0.1587     0.2240     0.0833                           0.0002
+       0.00     0.1589     0.2243     0.0832                           0.0000
+       2.00     0.1587     0.2240     0.0833                           0.0002
+       4.00     0.1581     0.2232     0.0832                           0.0009
+       6.00     0.1572     0.2218     0.0831                           0.0019
+       8.00     0.1558     0.2199     0.0829                           0.0029
+      10.00     0.1541     0.2175     0.0825                           0.0036
+
+                     CROSS FLOW DRAG PROPORTIONALITY FACTOR = 0.97278
+
+      ALPHA    CN-POTEN  CN-VISC   CN-SEP    CM-POTEN  CM-VISC   CM-SEP    CDC
+     -10.00    -0.338    -0.551              -0.210    -0.015             0.857
+      -8.00    -0.272    -0.344              -0.169    -0.009             0.834
+      -6.00    -0.206    -0.189              -0.128    -0.005             0.810
+      -4.00    -0.138    -0.082              -0.086    -0.002             0.787
+      -2.00    -0.069    -0.020              -0.043    -0.001             0.764
+       0.00     0.000     0.000               0.000     0.000             0.740
+       2.00     0.069     0.020               0.043     0.001             0.764
+       4.00     0.138     0.082               0.086     0.002             0.787
+       6.00     0.206     0.189               0.128     0.005             0.810
+       8.00     0.272     0.344               0.169     0.009             0.834
+      10.00     0.338     0.551               0.210     0.015             0.857
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE  13
+                     STATIC AERODYNAMICS FOR BODY ALONE
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       1.10                REYNOLDS NO = 2.550E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE =  85822.41 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+                   ----- LONGITUDINAL -----     -- LATERAL DIRECTIONAL --
+         ALPHA       CN        CM        CA        CY       CLN       CLL
+
+        -10.00    -0.889    -0.224     0.458     0.000     0.000     0.000
+         -8.00    -0.617    -0.178     0.462     0.000     0.000     0.000
+         -6.00    -0.395    -0.133     0.464     0.000     0.000     0.000
+         -4.00    -0.219    -0.088     0.465     0.000     0.000     0.000
+         -2.00    -0.089    -0.043     0.466     0.000     0.000     0.000
+          0.00     0.000     0.000     0.466     0.000     0.000     0.000
+          2.00     0.089     0.043     0.466     0.000     0.000     0.000
+          4.00     0.219     0.088     0.465     0.000     0.000     0.000
+          6.00     0.395     0.133     0.464     0.000     0.000     0.000
+          8.00     0.617     0.178     0.462     0.000     0.000     0.000
+         10.00     0.889     0.224     0.458     0.000     0.000     0.000
+
+         ALPHA       CL        CD      CL/CD     X-C.P.
+
+        -10.00    -0.796     0.605    -1.315     0.252
+         -8.00    -0.547     0.543    -1.007     0.289
+         -6.00    -0.344     0.503    -0.684     0.337
+         -4.00    -0.186     0.480    -0.389     0.400
+         -2.00    -0.073     0.469    -0.155     0.488
+          0.00     0.000     0.466     0.000     0.488
+          2.00     0.073     0.469     0.155     0.488
+          4.00     0.186     0.480     0.389     0.400
+          6.00     0.344     0.503     0.684     0.337
+          8.00     0.547     0.543     1.007     0.289
+         10.00     0.796     0.605     1.315     0.252
+
+    X-C.P. MEAS. FROM MOMENT CENTER IN REF. LENGTHS, NEG. AFT OF MOMENT CENTER
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE  14
+                     STATIC AERODYNAMICS FOR BODY ALONE
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       1.10                REYNOLDS NO = 2.550E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE =  85822.41 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+                   ---------- DERIVATIVES (PER DEGREE) ----------
+         ALPHA       CNA         CMA         CYB         CLNB        CLLB
+        -10.00      0.1483      0.0231     -0.0882     -0.0222      0.0000
+         -8.00      0.1235      0.0229     -0.0769     -0.0222      0.0000
+         -6.00      0.0993      0.0226     -0.0660     -0.0221      0.0000
+         -4.00      0.0764      0.0223     -0.0554     -0.0219      0.0000
+         -2.00      0.0549      0.0219     -0.0457     -0.0217      0.0000
+          0.00      0.0445      0.0217     -0.0419     -0.0217      0.0000
+          2.00      0.0549      0.0219     -0.0457     -0.0217      0.0000
+          4.00      0.0764      0.0223     -0.0554     -0.0219      0.0000
+          6.00      0.0993      0.0226     -0.0660     -0.0221      0.0000
+          8.00      0.1235      0.0229     -0.0769     -0.0222      0.0000
+         10.00      0.1483      0.0231     -0.0882     -0.0222      0.0000
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE  15
+                             BODY ALONE PARTIAL OUTPUT
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       1.40                REYNOLDS NO = 3.246E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE = 139018.12 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+      ALPHA    CA-FRIC  CA-PRES/WAVE CA-BASE    CA-PROT     CA-SEP     CA-ALP
+     -10.00     0.1424     0.2323     0.0740                           0.0000
+      -8.00     0.1440     0.2329     0.0744                           0.0000
+      -6.00     0.1452     0.2334     0.0748                           0.0000
+      -4.00     0.1461     0.2338     0.0750                           0.0000
+      -2.00     0.1467     0.2340     0.0751                           0.0000
+       0.00     0.1468     0.2340     0.0752                           0.0000
+       2.00     0.1467     0.2340     0.0751                           0.0000
+       4.00     0.1461     0.2338     0.0750                           0.0000
+       6.00     0.1452     0.2334     0.0748                           0.0000
+       8.00     0.1440     0.2329     0.0744                           0.0000
+      10.00     0.1424     0.2323     0.0740                           0.0000
+
+                     CROSS FLOW DRAG PROPORTIONALITY FACTOR = 1.00000
+
+      ALPHA    CN-POTEN  CN-VISC   CN-SEP    CM-POTEN  CM-VISC   CM-SEP    CDC
+     -10.00    -0.310    -0.610              -0.217    -0.016             0.923
+      -8.00    -0.251    -0.365              -0.175    -0.010             0.859
+      -6.00    -0.189    -0.199              -0.132    -0.005             0.830
+      -4.00    -0.127    -0.085              -0.089    -0.002             0.800
+      -2.00    -0.064    -0.021              -0.044    -0.001             0.770
+       0.00     0.000     0.000               0.000     0.000             0.740
+       2.00     0.064     0.021               0.044     0.001             0.770
+       4.00     0.127     0.085               0.089     0.002             0.800
+       6.00     0.189     0.199               0.132     0.005             0.830
+       8.00     0.251     0.365               0.175     0.010             0.859
+      10.00     0.310     0.610               0.217     0.016             0.923
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE  16
+                     STATIC AERODYNAMICS FOR BODY ALONE
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       1.40                REYNOLDS NO = 3.246E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE = 139018.12 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+                   ----- LONGITUDINAL -----     -- LATERAL DIRECTIONAL --
+         ALPHA       CN        CM        CA        CY       CLN       CLL
+
+        -10.00    -0.921    -0.233     0.449     0.000     0.000     0.000
+         -8.00    -0.615    -0.185     0.451     0.000     0.000     0.000
+         -6.00    -0.388    -0.138     0.453     0.000     0.000     0.000
+         -4.00    -0.212    -0.091     0.455     0.000     0.000     0.000
+         -2.00    -0.084    -0.045     0.456     0.000     0.000     0.000
+          0.00     0.000     0.000     0.456     0.000     0.000     0.000
+          2.00     0.084     0.045     0.456     0.000     0.000     0.000
+          4.00     0.212     0.091     0.455     0.000     0.000     0.000
+          6.00     0.388     0.138     0.453     0.000     0.000     0.000
+          8.00     0.615     0.185     0.451     0.000     0.000     0.000
+         10.00     0.921     0.233     0.449     0.000     0.000     0.000
+
+         ALPHA       CL        CD      CL/CD     X-C.P.
+
+        -10.00    -0.829     0.602    -1.377     0.253
+         -8.00    -0.547     0.533    -1.026     0.300
+         -6.00    -0.338     0.491    -0.688     0.355
+         -4.00    -0.180     0.469    -0.384     0.428
+         -2.00    -0.068     0.458    -0.149     0.535
+          0.00     0.000     0.456     0.000     0.535
+          2.00     0.068     0.458     0.149     0.535
+          4.00     0.180     0.469     0.384     0.428
+          6.00     0.338     0.491     0.688     0.355
+          8.00     0.547     0.533     1.026     0.300
+         10.00     0.829     0.602     1.377     0.253
+
+    X-C.P. MEAS. FROM MOMENT CENTER IN REF. LENGTHS, NEG. AFT OF MOMENT CENTER
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE  17
+                     STATIC AERODYNAMICS FOR BODY ALONE
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       1.40                REYNOLDS NO = 3.246E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE = 139018.12 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+                   ---------- DERIVATIVES (PER DEGREE) ----------
+         ALPHA       CNA         CMA         CYB         CLNB        CLLB
+        -10.00      0.1722      0.0245     -0.0915     -0.0231      0.0000
+         -8.00      0.1332      0.0239     -0.0768     -0.0230      0.0000
+         -6.00      0.1008      0.0235     -0.0649     -0.0228      0.0000
+         -4.00      0.0759      0.0231     -0.0536     -0.0227      0.0000
+         -2.00      0.0530      0.0227     -0.0433     -0.0225      0.0000
+          0.00      0.0421      0.0225     -0.0393     -0.0224      0.0000
+          2.00      0.0530      0.0227     -0.0433     -0.0225      0.0000
+          4.00      0.0759      0.0231     -0.0536     -0.0227      0.0000
+          6.00      0.1008      0.0235     -0.0649     -0.0228      0.0000
+          8.00      0.1332      0.0239     -0.0768     -0.0230      0.0000
+         10.00      0.1722      0.0245     -0.0915     -0.0231      0.0000
+
+    BODY ALONE LINEAR DATA GENERATED FROM VAN DYKE HYBRID THEORY
+
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE  18
+                             BODY ALONE PARTIAL OUTPUT
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       2.00                REYNOLDS NO = 4.637E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE = 283710.47 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+      ALPHA    CA-FRIC  CA-PRES/WAVE CA-BASE    CA-PROT     CA-SEP     CA-ALP
+     -10.00     0.1221     0.1742     0.0593                           0.0000
+      -8.00     0.1234     0.1746     0.0597                           0.0000
+      -6.00     0.1245     0.1750     0.0599                           0.0000
+      -4.00     0.1252     0.1753     0.0601                           0.0000
+      -2.00     0.1257     0.1754     0.0602                           0.0000
+       0.00     0.1259     0.1755     0.0603                           0.0000
+       2.00     0.1257     0.1754     0.0602                           0.0000
+       4.00     0.1252     0.1753     0.0601                           0.0000
+       6.00     0.1245     0.1750     0.0599                           0.0000
+       8.00     0.1234     0.1746     0.0597                           0.0000
+      10.00     0.1221     0.1742     0.0593                           0.0000
+
+                     CROSS FLOW DRAG PROPORTIONALITY FACTOR = 1.00000
+
+      ALPHA    CN-POTEN  CN-VISC   CN-SEP    CM-POTEN  CM-VISC   CM-SEP    CDC
+     -10.00    -0.397    -0.708              -0.228    -0.019             1.071
+      -8.00    -0.320    -0.413              -0.184    -0.011             0.973
+      -6.00    -0.242    -0.210              -0.139    -0.006             0.875
+      -4.00    -0.162    -0.088              -0.093    -0.002             0.825
+      -2.00    -0.081    -0.021              -0.047    -0.001             0.783
+       0.00     0.000     0.000               0.000     0.000             0.740
+       2.00     0.081     0.021               0.047     0.001             0.783
+       4.00     0.162     0.088               0.093     0.002             0.825
+       6.00     0.242     0.210               0.139     0.006             0.875
+       8.00     0.320     0.413               0.184     0.011             0.973
+      10.00     0.397     0.708               0.228     0.019             1.071
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE  19
+                     STATIC AERODYNAMICS FOR BODY ALONE
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       2.00                REYNOLDS NO = 4.637E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE = 283710.47 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+                   ----- LONGITUDINAL -----     -- LATERAL DIRECTIONAL --
+         ALPHA       CN        CM        CA        CY       CLN       CLL
+
+        -10.00    -1.104    -0.246     0.356     0.000     0.000     0.000
+         -8.00    -0.733    -0.195     0.358     0.000     0.000     0.000
+         -6.00    -0.451    -0.144     0.359     0.000     0.000     0.000
+         -4.00    -0.250    -0.095     0.361     0.000     0.000     0.000
+         -2.00    -0.102    -0.047     0.361     0.000     0.000     0.000
+          0.00     0.000     0.000     0.362     0.000     0.000     0.000
+          2.00     0.102     0.047     0.361     0.000     0.000     0.000
+          4.00     0.250     0.095     0.361     0.000     0.000     0.000
+          6.00     0.451     0.144     0.359     0.000     0.000     0.000
+          8.00     0.733     0.195     0.358     0.000     0.000     0.000
+         10.00     1.104     0.246     0.356     0.000     0.000     0.000
+
+         ALPHA       CL        CD      CL/CD     X-C.P.
+
+        -10.00    -1.026     0.542    -1.893     0.223
+         -8.00    -0.676     0.456    -1.482     0.265
+         -6.00    -0.411     0.405    -1.017     0.320
+         -4.00    -0.224     0.377    -0.594     0.381
+         -2.00    -0.089     0.365    -0.245     0.462
+          0.00     0.000     0.362     0.000     0.462
+          2.00     0.089     0.365     0.245     0.462
+          4.00     0.224     0.377     0.594     0.381
+          6.00     0.411     0.405     1.017     0.320
+          8.00     0.676     0.456     1.482     0.265
+         10.00     1.026     0.542     1.893     0.223
+
+    X-C.P. MEAS. FROM MOMENT CENTER IN REF. LENGTHS, NEG. AFT OF MOMENT CENTER
+1         ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****     CASE   1
+               AERODYNAMIC METHODS FOR MISSILE CONFIGURATIONS          PAGE  20
+                     STATIC AERODYNAMICS FOR BODY ALONE
+
+       ******* FLIGHT CONDITIONS AND REFERENCE QUANTITIES *******
+     MACH NO  =       2.00                REYNOLDS NO = 4.637E+07 /M
+     ALTITUDE =        0.0 M         DYNAMIC PRESSURE = 283710.47 N/M**2
+     SIDESLIP =       0.00 DEG                   ROLL =      0.00 DEG     
+     REF AREA =      0.004 M**2         MOMENT CENTER =     0.710 M
+     REF LENGTH =     1.28 M           LAT REF LENGTH =      1.28 M
+
+                   ---------- DERIVATIVES (PER DEGREE) ----------
+         ALPHA       CNA         CMA         CYB         CLNB        CLLB
+        -10.00      0.2078      0.0262     -0.1098     -0.0244      0.0000
+         -8.00      0.1631      0.0255     -0.0916     -0.0242      0.0000
+         -6.00      0.1208      0.0249     -0.0756     -0.0240      0.0000
+         -4.00      0.0873      0.0243     -0.0631     -0.0238      0.0000
+         -2.00      0.0625      0.0238     -0.0524     -0.0236      0.0000
+          0.00      0.0511      0.0236     -0.0482     -0.0235      0.0000
+          2.00      0.0625      0.0238     -0.0524     -0.0236      0.0000
+          4.00      0.0873      0.0243     -0.0631     -0.0238      0.0000
+          6.00      0.1208      0.0249     -0.0756     -0.0240      0.0000
+          8.00      0.1631      0.0255     -0.0916     -0.0242      0.0000
+         10.00      0.2078      0.0262     -0.1098     -0.0244      0.0000
+
+    BODY ALONE LINEAR DATA GENERATED FROM VAN DYKE HYBRID THEORY
+
+    *** END OF JOB ***

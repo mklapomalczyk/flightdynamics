@@ -1,0 +1,14 @@
+flight no	cant angle	head configuration	azimuth	elevation	m_empty	m_full	m_rocket	to analyze?
+9	0.6	ostra	92	45	2.944	3.86	8.4	no
+10	0.6	ostra	92	45	2.944	3.862	8.4	no
+13	0	tępa	92	45	3.31	4.168	8.4	yes
+11	0.6	ostra	92	45	3.31	4.094	8.4	no
+12	0.6	ostra	92	45	3.31	4.098	8.4	no
+14	1.2	ostra	79	55	2.66	3.72	4.2	yes
+15	1.6	ostra	330	45	0.876	1.672	4.2	yes
+16	1.6	ostra	330	45	0.865	1.657	4.2	yes
+17	0	tępa	330	45	0.883	1.672	4.2	yes
+18	0	ostra	325	45	0.867	1.654	4.2	yes
+21	0.6	ostra	325	45	0.88	1.632	4.2	yes
+19	0.6	ostra	325	45	0.882	1.65	4.2	yes
+20	0.6	ostra	325	45	0.886	1.656	4.2	yes
