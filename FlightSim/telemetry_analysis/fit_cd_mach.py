@@ -30,7 +30,7 @@ from scipy.integrate import solve_ivp
 
 from telemetry_parser import parse_telemetry, get_data_dir
 from imu_reconstruction import detect_ignition
-from diag_drag import load_config, isa, calib_acc_scale, detect_events
+from diag_drag import load_config, isa, calib_acc_scale, detect_events, smooth_gps_derivative
 
 G0    = 9.80665
 D_CAL = 0.070
@@ -62,24 +62,24 @@ def ballistic_rhs(t, state, m, S, cd_nodes):
     """
     Prawa strona rownan ruchu w 2D (plaszczyznie pionowej).
     state = [h, V_h, V_v]
-      h   — wysokosc [m]
-      V_h — predkosc pozioma [m/s]
-      V_v — predkosc pionowa [m/s] (+ = w gore)
+      h   — wysokosc MSL [m]
+      V_h — predkosc pozioma [m/s]  (= V_GPS z telemetrii)
+      V_v — predkosc pionowa [m/s] (+ = w gore, = dh/dt)
     """
     h, Vh, Vv = state
     h = max(h, 0.0)
 
     rho, a_snd, _, _ = isa(h)
-    V   = np.sqrt(Vh**2 + Vv**2)
-    Ma  = V / max(a_snd, 1.0)
+    V_total = np.sqrt(Vh**2 + Vv**2)
+    Ma  = V_total / max(a_snd, 1.0)
     Cd  = cd_interp(Ma, cd_nodes)
-    q   = 0.5 * rho * V**2
-    D   = Cd * q * S          # sila oporu [N]
+    q   = 0.5 * rho * V_total**2
+    D   = Cd * q * S          # sila oporu [N], kierunek: przeciwny do V_total
 
-    # przyspieszenia
-    if V > 0.01:
-        ax = -D * Vh / (V * m)
-        az = -D * Vv / (V * m) - G0
+    # przyspieszenia (rozkład siły oporu na skladowe)
+    if V_total > 0.01:
+        ax = -D * Vh / (V_total * m)
+        az = -D * Vv / (V_total * m) - G0
     else:
         ax = 0.0
         az = -G0
@@ -90,8 +90,9 @@ def ballistic_rhs(t, state, m, S, cd_nodes):
 def simulate(t_eval, state0, m, S, cd_nodes):
     """
     Propaguje trajektorie balistyczna od t_eval[0] do t_eval[-1].
-    Zwraca (h, V) na siatce t_eval. Jesli rakieta uderzy w ziemie,
-    wypelnia reszte NaN.
+    Zwraca (h, Vh) na siatce t_eval — Vh to pozioma predkosc
+    porownywana z GPS 'Predkosc lotu'.
+    Jesli rakieta uderzy w ziemie, wypelnia reszte NaN.
     """
     def hit_ground(t, y, *args): return y[0]
     hit_ground.terminal  = True
@@ -108,16 +109,15 @@ def simulate(t_eval, state0, m, S, cd_nodes):
     )
 
     n  = len(t_eval)
-    h_out = np.full(n, np.nan)
-    V_out = np.full(n, np.nan)
+    h_out  = np.full(n, np.nan)
+    Vh_out = np.full(n, np.nan)
 
     if sol.y.shape[1] > 0:
         nn = sol.y.shape[1]
-        h_out[:nn] = sol.y[0]
-        Vh = sol.y[1]; Vv = sol.y[2]
-        V_out[:nn]  = np.sqrt(Vh**2 + Vv**2)
+        h_out[:nn]  = sol.y[0]
+        Vh_out[:nn] = sol.y[1]   # pozioma predkosc = V_GPS
 
-    return h_out, V_out
+    return h_out, Vh_out
 
 
 # --------------------------------------------------------------------------
@@ -127,16 +127,19 @@ def prepare_flight(tel, cfg, t_offset_apo=2.0, min_points=30):
     """
     Wyciaga dane GPS fazy zniżania.
 
+    UWAGA: 'Predkosc lotu' w telemetrii to pozioma predkosc GPS (Vh),
+    nie predkosc calkowita. Predkosc pionowa Vz = dh/dt.
+    Oba skladniki potrzebne do inicjalizacji modelu balistycznego.
+
     t_offset_apo: ile sekund po apogeum brac jako punkt startowy modelu
-    Vv0 estymowane z dh/dt na dluzszym oknie (5s) dla stabilnosci.
     """
     t    = tel.time
     h    = tel.alt_onboard
-    V    = tel.vel_onboard
+    V    = tel.vel_onboard       # Vh (pozioma)
     N    = len(t)
 
     t_ign = detect_ignition(tel)
-    _, _, i_apo, _ = detect_events(tel, t_ign)
+    _, _, i_apo, i_end = detect_events(tel, t_ign)
     t_apo = t[i_apo]
 
     t_start = t_apo + t_offset_apo
@@ -144,20 +147,27 @@ def prepare_flight(tel, cfg, t_offset_apo=2.0, min_points=30):
     if i_start >= N - min_points:
         i_start = i_apo + 5
 
-    h0 = float(h[i_start])
-    V0 = float(V[i_start])
+    # Predkosc pionowa z pochodnej wysokosci — uzywamy okna +-2s dla stabilnosci
+    Vz_full = smooth_gps_derivative(h, t, window_s=0.6)
+    Vz0 = float(Vz_full[i_start])
+    Vh0 = float(V[i_start])
+    h0  = float(h[i_start])
 
+    # Wytnij dane fazy zniżania (co 5 prob = 50Hz)
     step  = 5
-    i_ref = np.arange(i_start, N, step)
-    valid = np.isfinite(h[i_ref]) & np.isfinite(V[i_ref]) & (V[i_ref] > 1.0)
+    i_ref = np.arange(i_start, i_end, step)
+    valid = (np.isfinite(h[i_ref]) & np.isfinite(V[i_ref])
+             & (V[i_ref] > 1.0)
+             # odrzuc punkty gdzie dVh/dt > 10 (spadochron)
+             & (np.abs(smooth_gps_derivative(V, t, window_s=0.5)[i_ref]) < 10.0))
     i_ref = i_ref[valid]
 
     if len(i_ref) < min_points:
         return None
 
     return dict(
-        t0=float(t[i_start]), h0=h0, V0=V0,
-        t_ref=t[i_ref], h_ref=h[i_ref], V_ref=V[i_ref],
+        t0=float(t[i_start]), h0=h0, Vh0=Vh0, Vz0=Vz0,
+        t_ref=t[i_ref], h_ref=h[i_ref], Vh_ref=V[i_ref],
         m_coast=cfg["m_coast"],
         flight_no=None,
         t_apo=t_apo, h_apo=float(h[i_apo]),
@@ -169,51 +179,44 @@ def prepare_flight(tel, cfg, t_offset_apo=2.0, min_points=30):
 # --------------------------------------------------------------------------
 def cost(params, flights_data, w_h=1.0, w_v=1.0, lam=0.1):
     """
-    Funkcja celu — znormalizowana przez wariancje h i V GPS.
+    Funkcja celu — znormalizowana przez wariancje h i Vh GPS.
 
-    J = sum_loty [ mean((dh/sigma_h)^2) + w_v*mean((dV/sigma_V)^2) ]
+    J = sum_loty [ mean((dh/sigma_h)^2) + w_v*mean((dVh/sigma_Vh)^2) ]
         + lam * sum(dCd^2)
 
-    Normalizacja przez sigma zapewnia ze bledy h i V maja porownywalne
-    wagi niezaleznie od ich skal bezwzglednych.
-    """
-    n_f    = len(flights_data)
-    cd_raw = params[:N_NODES]
-    g0_raw = params[N_NODES:]
+    Model porownuje:
+      h_sim   vs h_ref   (GPS altitude, MSL)
+      Vh_sim  vs Vh_ref  (GPS horizontal speed = 'Predkosc lotu')
 
-    cd_nodes = CD_LO + (CD_HI - CD_LO) * _sigmoid(cd_raw)
-    gamma0s  = np.radians(-89 + 88 * _sigmoid(g0_raw))
+    Warunki poczatkowe Vh0, Vz0 sa ZNANE z GPS (obliczone w prepare_flight)
+    i NIE sa optymalizowane — tylko Cd(Ma) jest wolnym parametrem.
+    """
+    cd_nodes = CD_LO + (CD_HI - CD_LO) * _sigmoid(params)
 
     J = 0.0
-    for k, fd in enumerate(flights_data):
-        t_ref = fd['t_ref']
-        h_ref = fd['h_ref']
-        V_ref = fd['V_ref']
-        m     = fd['m_coast']
-        V0    = fd['V0']
+    for fd in flights_data:
+        t_ref  = fd['t_ref']
+        h_ref  = fd['h_ref']
+        Vh_ref = fd['Vh_ref']
+        m      = fd['m_coast']
 
-        gamma0 = float(gamma0s[k])
-        Vv0    = V0 * np.sin(gamma0)
-        Vh0    = V0 * np.cos(gamma0)
-
-        state0 = [fd['h0'], Vh0, Vv0]
+        state0 = [fd['h0'], fd['Vh0'], fd['Vz0']]
         t_sim  = t_ref - t_ref[0]
 
-        h_sim, V_sim = simulate(t_sim, state0, m, S, cd_nodes)
+        h_sim, Vh_sim = simulate(t_sim, state0, m, S, cd_nodes)
 
-        ok = np.isfinite(h_sim) & np.isfinite(V_sim)
+        ok = np.isfinite(h_sim) & np.isfinite(Vh_sim)
         if np.sum(ok) < 5:
             J += 1e6
             continue
 
-        dh = h_sim[ok] - h_ref[ok]
-        dV = V_sim[ok] - V_ref[ok]
+        dh  = h_sim[ok]  - h_ref[ok]
+        dVh = Vh_sim[ok] - Vh_ref[ok]
 
-        # normalizuj przez odchylenie standardowe danych referencyjnych
-        sig_h = max(np.std(h_ref[ok]), 1.0)
-        sig_v = max(np.std(V_ref[ok]), 0.1)
+        sig_h  = max(np.std(h_ref[ok]),  1.0)
+        sig_vh = max(np.std(Vh_ref[ok]), 0.1)
 
-        J += w_h * np.mean((dh / sig_h)**2) + w_v * np.mean((dV / sig_v)**2)
+        J += w_h * np.mean((dh / sig_h)**2) + w_v * np.mean((dVh / sig_vh)**2)
 
     dCd = np.diff(cd_nodes)
     J  += lam * np.sum(dCd**2)
@@ -237,68 +240,52 @@ def fit_cd(flights_data, n_starts=10, lam=0.1, w_h=1.0, w_v=1.0,
            cd_init=None, verbose=True):
     """
     Wielokrotny Nelder-Mead z losowych startow.
-    Wektor optymalizowany: [cd_nodes (N_NODES), gamma0_per_lot (n_lots)]
-    gamma0 = kat toru w punkcie startowym — traktowany jako nieznany.
-    Zwraca (best_cd, best_gamma0s, best_J, results).
+    Optymalizowany wektor: tylko cd_nodes (N_NODES parametrow).
+    Warunki poczatkowe Vh0, Vz0 wyznaczone z GPS — nie sa optymalizowane.
+    Zwraca (best_cd, best_J, results).
     """
-    n_f = len(flights_data)
     if cd_init is None:
-        cd_init = np.full(N_NODES, 0.35)
-    # gamma0 init: -30 stopni dla wszystkich
-    g0_init = np.full(n_f, np.radians(-30))
+        cd_init = np.full(N_NODES, 0.50)
 
-    def pack(cd, g0):
-        cd_raw = _sigmoid_inv((cd - CD_LO) / (CD_HI - CD_LO))
-        # gamma0 w (-89°, -1°): mapuj przez sigmoid
-        g0_norm = (np.degrees(g0) + 89) / 88   # -> (0,1)
-        g0_raw  = _sigmoid_inv(np.clip(g0_norm, 1e-6, 1-1e-6))
-        return np.concatenate([cd_raw, g0_raw])
+    def pack(cd):
+        return _sigmoid_inv((cd - CD_LO) / (CD_HI - CD_LO))
 
     def unpack(params):
-        cd  = CD_LO + (CD_HI - CD_LO) * _sigmoid(params[:N_NODES])
-        g0  = np.radians(-89 + 88 * _sigmoid(params[N_NODES:]))
-        return cd, g0
+        return CD_LO + (CD_HI - CD_LO) * _sigmoid(params)
 
-    best_J    = np.inf
-    best_cd   = cd_init.copy()
-    best_g0   = g0_init.copy()
-    results   = []
+    best_J  = np.inf
+    best_cd = cd_init.copy()
+    results = []
 
     rng = np.random.default_rng(42)
     starts_cd = [cd_init.copy()]
-    starts_g0 = [g0_init.copy()]
     for _ in range(n_starts - 1):
         cd_r = rng.uniform(CD_LO+0.05, CD_HI-0.05, N_NODES)
         cd_r = np.convolve(cd_r, [0.25,0.5,0.25], mode='same')
         cd_r = np.clip(cd_r, CD_LO+0.01, CD_HI-0.01)
-        g0_r = np.radians(rng.uniform(-70, -10, n_f))
         starts_cd.append(cd_r)
-        starts_g0.append(g0_r)
 
     for k in range(n_starts):
-        x0  = pack(starts_cd[k], starts_g0[k])
+        x0  = pack(starts_cd[k])
         res = minimize(
             cost, x0,
             args=(flights_data, w_h, w_v, lam),
             method='Nelder-Mead',
-            options=dict(maxiter=8000, xatol=1e-4, fatol=1e-2,
+            options=dict(maxiter=10000, xatol=1e-5, fatol=1e-3,
                          adaptive=True),
         )
-        cd_opt, g0_opt = unpack(res.x)
-        J_opt = res.fun
-        results.append((J_opt, cd_opt.copy(), g0_opt.copy()))
+        cd_opt = unpack(res.x)
+        J_opt  = res.fun
+        results.append((J_opt, cd_opt.copy()))
         if verbose:
-            g0_deg = np.degrees(g0_opt)
-            print(f"  start {k+1:2d}/{n_starts}: J={J_opt:.1f}  "
+            print(f"  start {k+1:2d}/{n_starts}: J={J_opt:.4f}  "
                   f"Cd=[{cd_opt.min():.3f},{cd_opt.max():.3f}]  "
-                  f"gamma0={g0_deg}  "
                   f"{'*' if J_opt < best_J else ''}")
         if J_opt < best_J:
             best_J  = J_opt
             best_cd = cd_opt.copy()
-            best_g0 = g0_opt.copy()
 
-    return best_cd, best_g0, best_J, results
+    return best_cd, best_J, results
 
 
 # --------------------------------------------------------------------------
@@ -337,9 +324,11 @@ def run(flight_nos, base=None, n_starts=15, lam=0.1, w_h=1.0, w_v=0.3,
         flights_data.append(fd)
         tels[fno] = tel
 
+        gamma0_deg = np.degrees(np.arctan2(fd['Vz0'], fd['Vh0']))
         print(f"[LOT {fno}] m_coast={cfg['m_coast']:.3f}kg  "
               f"t0={fd['t0']:.1f}s  h0={fd['h0']:.0f}m  "
-              f"V0={fd['V0']:.1f}m/s  n_ref={len(fd['t_ref'])}")
+              f"Vh0={fd['Vh0']:.1f}m/s  Vz0={fd['Vz0']:.1f}m/s  "
+              f"gamma0={gamma0_deg:.1f}°  n_ref={len(fd['t_ref'])}")
 
     if not flights_data:
         print("Brak danych do analizy.")
@@ -350,12 +339,10 @@ def run(flight_nos, base=None, n_starts=15, lam=0.1, w_h=1.0, w_v=0.3,
     print(f"Siatka Ma: {MA_NODES[0]:.3f} .. {MA_NODES[-1]:.3f}  "
           f"({N_NODES} wezlow, dMa={DMA})")
 
-    best_cd, best_g0, best_J, all_res = fit_cd(
+    best_cd, best_J, all_res = fit_cd(
         flights_data, n_starts=n_starts, lam=lam, w_h=1.0, w_v=1.0)
 
-    print(f"\nNajlepsze J={best_J:.3f}")
-    for k, fd in enumerate(flights_data):
-        print(f"  Lot {fd['flight_no']}: gamma0={np.degrees(best_g0[k]):.1f}°")
+    print(f"\nNajlepsze J={best_J:.4f}")
     print(f"{'Mach':>6} {'Cd':>8}")
     for ma, cd in zip(MA_NODES, best_cd):
         print(f"{ma:6.3f} {cd:8.4f}")
@@ -370,8 +357,8 @@ def run(flight_nos, base=None, n_starts=15, lam=0.1, w_h=1.0, w_v=0.3,
     ax0.plot(MA_NODES, best_cd, 'b-o', lw=2, ms=6, label="Cd dopasowane")
     ax0.fill_between(MA_NODES, CD_LO, CD_HI, alpha=0.07, color='gray',
                      label=f"zakres ({CD_LO}-{CD_HI})")
-    ax0.set_xlabel("Mach"); ax0.set_ylabel("Cd")
-    ax0.set_title(f"Cd(Ma) — loty {flight_nos}  J={best_J:.2f}")
+    ax0.set_xlabel("Mach (V_total)"); ax0.set_ylabel("Cd")
+    ax0.set_title(f"Cd(Ma) — loty {flight_nos}  J={best_J:.4f}")
     ax0.grid(alpha=0.3); ax0.legend(fontsize=8)
     ax0.set_ylim(0, 0.9)
 
@@ -383,29 +370,27 @@ def run(flight_nos, base=None, n_starts=15, lam=0.1, w_h=1.0, w_v=0.3,
     ax1.set_title("Zbieznosc — J per start"); ax1.grid(alpha=0.3)
 
     t_fine = np.linspace(0, 80, 4000)
-    for row, (fd, g0) in enumerate(zip(flights_data, best_g0), start=1):
-        fno  = fd['flight_no']
-        V0   = fd['V0']
-        Vv0  = V0 * np.sin(g0)
-        Vh0  = V0 * np.cos(g0)
-        state0 = [fd['h0'], Vh0, Vv0]
-        h_sim, V_sim = simulate(t_fine, state0, fd['m_coast'], S, best_cd)
-        t_abs = t_fine + fd['t0']
+    for row, fd in enumerate(flights_data, start=1):
+        fno    = fd['flight_no']
+        state0 = [fd['h0'], fd['Vh0'], fd['Vz0']]
+        h_sim, Vh_sim = simulate(t_fine, state0, fd['m_coast'], S, best_cd)
+        t_abs  = t_fine + fd['t0']
+        gamma0_deg = np.degrees(np.arctan2(fd['Vz0'], fd['Vh0']))
 
         ax_h = axes[row, 0]
-        ax_h.plot(fd['t_ref'], fd['h_ref'], 'r.', ms=3, label="GPS")
+        ax_h.plot(fd['t_ref'], fd['h_ref'], 'r.', ms=3, label="GPS h")
         ok = np.isfinite(h_sim)
         ax_h.plot(t_abs[ok], h_sim[ok], 'b-', lw=1.5, label="model")
         ax_h.axvline(fd['t0'], color='k', ls=':', lw=1)
-        ax_h.set_xlabel("Czas [s]"); ax_h.set_ylabel("h [m]")
-        ax_h.set_title(f"Lot {fno} — h  (gamma0={np.degrees(g0):.1f}°)")
+        ax_h.set_xlabel("Czas [s]"); ax_h.set_ylabel("h MSL [m]")
+        ax_h.set_title(f"Lot {fno} — h  (gamma0={gamma0_deg:.1f}°)")
         ax_h.legend(fontsize=8); ax_h.grid(alpha=0.3)
 
         ax_v = axes[row, 1]
-        ax_v.plot(fd['t_ref'], fd['V_ref'], 'r.', ms=3, label="GPS")
-        ax_v.plot(t_abs[ok], V_sim[ok], 'b-', lw=1.5, label="model")
-        ax_v.set_xlabel("Czas [s]"); ax_v.set_ylabel("V [m/s]")
-        ax_v.set_title(f"Lot {fno} — V")
+        ax_v.plot(fd['t_ref'], fd['Vh_ref'], 'r.', ms=3, label="GPS Vh")
+        ax_v.plot(t_abs[ok], Vh_sim[ok], 'b-', lw=1.5, label="model Vh")
+        ax_v.set_xlabel("Czas [s]"); ax_v.set_ylabel("Vh [m/s]")
+        ax_v.set_title(f"Lot {fno} — pozioma predkosc")
         ax_v.legend(fontsize=8); ax_v.grid(alpha=0.3)
 
     plt.tight_layout()
@@ -415,7 +400,7 @@ def run(flight_nos, base=None, n_starts=15, lam=0.1, w_h=1.0, w_v=0.3,
     plt.close()
     print(f"Zapisano: {out_png}")
 
-    return best_cd, best_g0
+    return best_cd
 
 
 # --------------------------------------------------------------------------

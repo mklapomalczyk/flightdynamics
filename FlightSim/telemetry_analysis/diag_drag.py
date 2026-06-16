@@ -146,114 +146,83 @@ def detect_events(tel, t_ign):
     return i_ign, i_bo, i_apo, i_end
 
 
-def safe_dVdt(V, t_arr, smooth_window=25):
+def smooth_gps_derivative(signal, t_arr, window_s=0.6):
     """
-    dV/dt z gradientem centralnym, odporny na powtarzajace sie timestampy
-    (dt=0 z zamrozonych GPS). Punkty z dt=0 interpolowane liniowo.
+    Pochodna sygnalu GPS (schodkowego) przez srednia kroczaca.
+
+    GPS aktualizuje sie z ~4-10 Hz wiec sygnal jest schodkowy przy 250 Hz
+    telemetrii. Uzywamy sredniej kroczacej nad oknem ~0.6s (150 probek)
+    przed roznickowaniem — to wyglądza skoki i daje stabilna pochodna.
     """
-    dt = np.diff(t_arr)
-    # napraw dt=0: zastap medianą kroczacą
-    dt_med = np.median(dt[dt > 0]) if np.any(dt > 0) else 0.004
-    dt_safe = np.where(dt <= 0, dt_med, dt)
-    # odbuduj os czasu bez skokow (tylko do gradientu)
-    t_safe = np.concatenate([[t_arr[0]], t_arr[0] + np.cumsum(dt_safe)])
+    dt = np.median(np.diff(t_arr))
+    dt = dt if dt > 0 else 0.004
+    win = max(3, int(round(window_s / dt)))
+    if win % 2 == 0:
+        win += 1
+    kernel = np.ones(win) / win
+    smoothed = np.convolve(signal, kernel, mode='same')
 
-    dV = np.gradient(V, t_safe)
+    # napraw krawedzie (convolve ze stala -> efekt brzegowy)
+    half = win // 2
+    for i in range(half):
+        smoothed[i]      = np.mean(signal[:2*i+1]) if i > 0 else signal[0]
+        smoothed[-i-1]   = np.mean(signal[-2*i-2:]) if i > 0 else signal[-1]
 
-    if smooth_window >= 2:
-        kernel = np.ones(smooth_window) / smooth_window
-        dV = np.convolve(dV, kernel, mode='same')
-    return dV
+    # gradient centralny na wygladzonym sygnale
+    dt_safe = np.where(np.diff(t_arr) > 0, np.diff(t_arr), dt)
+    t_safe  = np.concatenate([[t_arr[0]], t_arr[0] + np.cumsum(dt_safe)])
+    return np.gradient(smoothed, t_safe)
 
 
-def cd_on(tel, mask, m_coast, S, acc_scale):
+def cd_on(tel, mask, m_coast, S, acc_scale=None):
     """
-    Cd z fazy balistycznej (tylko zniżanie).
+    Cd z fazy balistycznej — metoda czysto GPS.
 
-    gamma z rownania ruchu wzdluz toru: g*sin(gamma) = ax*G0 - dV/dt
-    a_drag = dV/dt - ax*G0  (= -g*sin(gamma), zawiera bias jako staly offset)
-    Cd_raw = m * a_drag / (q * S)   — zawiera blad biasu proporcjonalny 1/q
+    Kolumna GPS 'Predkosc lotu' zawiera pozioma predkosc Vh (ground speed 2D).
+    Predkosc pionowa Vz = dh/dt z wysokosci GPS.
+    Predkosc calkowita: V_total = sqrt(Vh^2 + Vz^2).
+    Dynamika pozioma (bez ciagu):
+        m * dVh/dt = -D * (Vh/V_total)
+    stad:
+        D = -m * dVh/dt * V_total / Vh
+        Cd = D / (q * S)  gdzie q = 0.5 * rho * V_total^2
+
+    Nie uzywa IMU — brak bledu od wirowania rakiety / biasu akcelerometru.
     """
-    t_mask = tel.time[mask]
-    V  = tel.vel_onboard[mask]
-    h  = tel.alt_onboard[mask]
+    t_m = tel.time[mask]
+    Vh  = tel.vel_onboard[mask]      # pozioma predkosc GPS [m/s]
+    h   = tel.alt_onboard[mask]      # wysokosc GPS (MSL) [m]
+
+    # Predkosc pionowa z pochodnej wysokosci GPS
+    Vz = smooth_gps_derivative(h, t_m, window_s=0.5)
+
+    # Calkowita predkosc i kat toru
+    V_total = np.sqrt(Vh**2 + Vz**2)
+    sin_g   = np.where(V_total > 1.0, Vz / V_total, 0.0)
+    gamma   = np.arcsin(np.clip(sin_g, -1.0, 1.0))
+
+    # Atmosfera i cisnienie dynamiczne
     rho, a_snd, _, _ = isa(h)
-    q  = 0.5 * rho * V**2
+    q  = 0.5 * rho * V_total**2
+    Ma = V_total / np.maximum(a_snd, 1.0)
 
-    ax = tel.acc_x[mask] * acc_scale   # [g]
-    ay = tel.acc_y[mask] * acc_scale
-    az = tel.acc_z[mask] * acc_scale
+    # Pochodna poziomej predkosci GPS
+    dVh_dt = smooth_gps_derivative(Vh, t_m, window_s=0.5)
 
-    dV_dt = safe_dVdt(V, t_mask, smooth_window=25)
-
-    # g*sin(gamma) = ax*G0 - dV_dt  =>  sin(gamma) = (ax*G0 - dV_dt)/G0
-    sin_g = np.clip((ax * G0 - dV_dt) / G0, -1.0, 1.0)
-    gamma = np.arcsin(sin_g)
-
-    # D/m = -ax*G0 - G0*sin(gamma) = dV_dt - 2*ax*G0 + ax*G0 = ...
-    # jawna forma:
-    a_drag = -ax * G0 - G0 * sin_g   # [m/s²], dodatnia = hamowanie
-    a_mag  = np.sqrt(ax**2 + ay**2 + az**2) * G0
-
+    # Sila oporu z rownania poziomego: D = -m * dVh/dt * V_total / Vh
     with np.errstate(divide='ignore', invalid='ignore'):
-        Cd_axial = np.where(q > 0.5, (m_coast * a_drag) / (q * S), np.nan)
-        Cd_mag   = np.where(q > 0.5, (m_coast * a_mag)  / (q * S), np.nan)
+        D = np.where(Vh > 1.0, -m_coast * dVh_dt * V_total / Vh, np.nan)
+        Cd = np.where(q > 50.0, D / (q * S), np.nan)
 
-    M   = V / a_snd
-    lat = np.sqrt(ay**2 + az**2) * G0
-    return dict(t=t_mask, V=V, h=h, M=M, q=q,
+    # Weryfikacja: Cd z rownania calkowitego (powinno sie zgadzac)
+    dVtot_dt = smooth_gps_derivative(V_total, t_m, window_s=0.5)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        a_drag_tot = -dVtot_dt - G0 * sin_g
+        Cd_check   = np.where(q > 50.0, m_coast * a_drag_tot / (q * S), np.nan)
+
+    return dict(t=t_m, Vh=Vh, Vz=Vz, V_total=V_total, h=h, M=Ma, q=q,
                 gamma=gamma, sin_g=sin_g,
-                Cd_axial=Cd_axial, Cd_mag=Cd_mag,
-                a_drag=a_drag, a_mag=a_mag, lat=lat)
-
-
-def estimate_bias(D, m_coast, S, M_lo=0.28, M_hi=0.42):
-    """
-    Estymacja biasu akcelerometru z regresji Cd_meas = Cd0 + C/q.
-
-    Model: w waskim pasmie Mach gdzie Cd_true ≈ const:
-        Cd_meas = Cd_true + C/q,  C = -m*b*G0/S
-        => b = -C*S/(m*G0)  [g]
-
-    Dobre okno: wąskie Mach (Cd płaskie) + duży zakres q (bias obserwowalny).
-    R² > 0.3 i |b| < 0.1g — dobra estymacja.
-    R² < 0.1 — bias nieobserwowalny w tym oknie.
-    """
-    sel = (D['M'] >= M_lo) & (D['M'] < M_hi) & np.isfinite(D['Cd_axial'])
-    if np.sum(sel) < 20:
-        return None
-
-    q_sel  = D['q'][sel]
-    Cd_sel = D['Cd_axial'][sel]
-
-    q_range = np.max(q_sel) / max(np.min(q_sel), 1e-6)
-    if q_range < 1.3:
-        return None   # za maly zakres q
-
-    inv_q = 1.0 / q_sel
-    A     = np.vstack([np.ones_like(inv_q), inv_q]).T
-    coef, *_ = np.linalg.lstsq(A, Cd_sel, rcond=None)
-    Cd0, C = coef
-
-    pred   = A @ coef
-    ss_res = np.sum((Cd_sel - pred)**2)
-    ss_tot = np.sum((Cd_sel - np.mean(Cd_sel))**2)
-    R2     = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
-    sigma  = np.std(Cd_sel - pred)
-    b_est  = -C * S / (m_coast * G0)
-
-    return dict(b_est=b_est, C=C, Cd0=Cd0, R2=R2, sigma=sigma,
-                n=int(np.sum(sel)), M_lo=M_lo, M_hi=M_hi,
-                q_range=q_range)
-
-
-def apply_bias_correction(D, b_est, m_coast, S):
-    """
-    Koryguje Cd o oszacowany bias: Cd_corr = Cd_meas + m*b*G0/(q*S).
-    Zwraca nowa tablice Cd_corrected.
-    """
-    correction = m_coast * b_est * G0 / (D['q'] * S)
-    return D['Cd_axial'] + correction
+                Cd=Cd, Cd_check=Cd_check, dVh_dt=dVh_dt)
 
 
 def bin_stats(M, Cd, edges):
@@ -270,7 +239,11 @@ def bin_stats(M, Cd, edges):
 # --------------------------------------------------------------------------
 def analyze(tel, cfg, S, flight_no, out_png):
     """
-    Analiza Cd z fazy zniżania. Estymuje bias akcelerometru.
+    Analiza Cd z fazy zniżania — metoda GPS.
+
+    GPS daje pozioma predkosc Vh i wysokosc h.
+    Predkosc pionowa Vz = dh/dt, predkosc calkowita V_total = sqrt(Vh^2+Vz^2).
+    Cd wyznaczane z rownania poziomego bez IMU.
     """
     m_coast      = cfg["m_coast"]
     m_rocket     = cfg["m_rocket"]
@@ -288,96 +261,118 @@ def analyze(tel, cfg, S, flight_no, out_png):
     print(f"  Zaplon   t={t[i_ign]:.3f}s")
     print(f"  Burnout  t={t[i_bo]:.3f}s")
     print(f"  Apogeum  t={t[i_apo]:.3f}s  h={tel.alt_onboard[i_apo]:.1f}m  "
-          f"V={tel.vel_onboard[i_apo]:.1f}m/s")
+          f"V_GPS={tel.vel_onboard[i_apo]:.1f}m/s")
     print(f"  Koniec   t={t[i_end]:.3f}s  (ostatnia probka)")
 
     n   = len(t)
+    # Faza ballistyczna: od apogeum do konca, ale pomijamy ostatnie sekundy
+    # gdzie moze byc wdrozenie spadochronu (anomalie predkosci)
     des = (np.arange(n) >= i_apo) & (np.arange(n) <= i_end)
 
     if np.sum(des) < 20:
-        print("  [BLAD] Za malo probek w fazie znizania"); return None, None
+        print("  [BLAD] Za malo probek w fazie znizania"); return None
 
-    D = cd_on(tel, des, m_coast, S, acc_scale)
+    D = cd_on(tel, des, m_coast, S)
 
-    # --- estymacja biasu ---
-    bias = estimate_bias(D, m_coast, S, M_lo=0.25, M_hi=0.50)
-    if bias:
-        print(f"\n  Bias: b={bias['b_est']:+.4f}g  Cd0={bias['Cd0']:.3f}  "
-              f"C={bias['C']:.2f}  R²={bias['R2']:.3f}  "
-              f"σ={bias['sigma']:.3f}  n={bias['n']}  "
-              f"M=[{bias['M_lo']},{bias['M_hi']}]")
-        Cd_corr = apply_bias_correction(D, bias['b_est'], m_coast, S)
-    else:
-        print("  Bias: za malo danych do estymacji")
-        Cd_corr = D['Cd_axial'].copy()
+    # Odrzuc punkty przed stabilizacja (pierwsze 2s po apogeum)
+    t_apo = t[i_apo]
+    valid = (D['t'] > t_apo + 2.0) & np.isfinite(D['Cd']) & (D['q'] > 100)
+
+    # Wykryj koniec fazy balistycznej: skoki predkosci (spadochron) => dVh/dt > 10
+    # Szukamy pierwszego momentu gdzie dVh/dt > 10 m/s^2 (hamowanie spadochronem)
+    chute_mask = np.abs(D['dVh_dt']) > 10.0
+    if np.any(chute_mask[valid]):
+        i_chute = np.where(valid & chute_mask)[0][0]
+        t_chute = D['t'][i_chute]
+        valid = valid & (D['t'] < t_chute)
+        print(f"  Spadochron wykryty ok. t={t_chute:.1f}s — obcinanie danych")
+
+    if np.sum(valid) < 10:
+        print("  [BLAD] Za malo waznych probek Cd"); return None
 
     # --- tabela Mach ---
-    edges = np.arange(0.18, 0.68, 0.04)
-    print(f"\n  {'Mach':>6} {'Cd_raw':>8} {'Cd_corr':>8} {'sd_raw':>7} {'n':>5}")
-    bins_raw  = {round(b[0],3): b for b in bin_stats(D['M'], D['Cd_axial'], edges)}
-    bins_corr = {round(b[0],3): b for b in bin_stats(D['M'], Cd_corr,       edges)}
-    for c in sorted(bins_raw):
-        r = bins_raw[c]; cr = bins_corr.get(c)
-        cd_c = f"{cr[1]:8.3f}" if cr else "     ---"
-        print(f"  {c:6.2f} {r[1]:8.3f} {cd_c} {r[2]:7.3f} {r[3]:5d}")
+    edges = np.arange(0.20, 0.80, 0.04)
+    Cd_v   = D['Cd'][valid]
+    Ma_v   = D['M'][valid]
+    bins   = bin_stats(Ma_v, Cd_v, edges)
+    bins_check = bin_stats(Ma_v, D['Cd_check'][valid], edges)
 
-    ok = np.isfinite(D['Cd_axial'])
-    ok_c = np.isfinite(Cd_corr)
-    print(f"\n  Zniżanie: Cd_raw={np.nanmedian(D['Cd_axial'][ok]):.3f}  "
-          f"Cd_corr={np.nanmedian(Cd_corr[ok_c]):.3f}  "
-          f"M=[{D['M'][ok].min():.2f},{D['M'][ok].max():.2f}]  "
-          f"gamma_med={np.degrees(np.nanmedian(D['gamma'])):.1f}°  "
-          f"lat/drag={np.nanmedian(D['lat']/(np.abs(D['a_drag'])+1e-9)):.2f}")
+    print(f"\n  Cd z metody GPS (Vh-only) vs weryfikacja (V_total):")
+    print(f"  {'Mach':>6} {'Cd_Vh':>8} {'Cd_Vtot':>9} {'sd':>7} {'n':>5}")
+    bins_dict  = {round(b[0],3): b for b in bins}
+    binsck_dict = {round(b[0],3): b for b in bins_check}
+    for c in sorted(bins_dict):
+        r  = bins_dict[c]
+        ck = binsck_dict.get(c)
+        ck_str = f"{ck[1]:9.3f}" if ck else "      ---"
+        print(f"  {c:6.2f} {r[1]:8.3f} {ck_str} {r[2]:7.3f} {r[3]:5d}")
+
+    ok_Cd = np.isfinite(Cd_v)
+    Ma_range = (Ma_v[ok_Cd].min(), Ma_v[ok_Cd].max())
+    gamma_med = np.degrees(np.nanmedian(D['gamma'][valid]))
+    print(f"\n  Zniżanie: Cd_med={np.nanmedian(Cd_v[ok_Cd]):.3f}  "
+          f"Ma=[{Ma_range[0]:.2f},{Ma_range[1]:.2f}]  "
+          f"gamma_med={gamma_med:.1f}°")
+    print(f"  V_total_max={D['V_total'][valid].max():.1f}  "
+          f"V_total_min={D['V_total'][valid].min():.1f} m/s")
 
     # ---------- wykresy ----------
     fig, axes = plt.subplots(2, 2, figsize=(14, 9))
-    fig.suptitle(f"diag_drag — Lot {flight_no}  "
-                 f"m_coast={m_coast:.2f}kg  m_rocket={m_rocket:.2f}kg  "
-                 f"S={S*1e4:.2f}cm²",
+    fig.suptitle(f"diag_drag (GPS) — Lot {flight_no}  "
+                 f"m_coast={m_coast:.2f}kg  S={S*1e4:.2f}cm²",
                  fontweight="bold")
 
-    # 1. Cd vs Mach (raw i corrected)
+    # 1. Cd vs Mach
     ax0 = axes[0, 0]
-    ax0.scatter(D['M'], D['Cd_axial'], s=5, c='tab:red',    alpha=0.3, label="Cd_raw")
-    ax0.scatter(D['M'], Cd_corr,       s=5, c='tab:blue',   alpha=0.4, label="Cd_corr")
-    ax0.scatter(D['M'], D['Cd_mag'],   s=4, c='tab:orange', alpha=0.2, marker='x', label="|a| mag")
+    ax0.scatter(D['M'][valid], D['Cd'][valid], s=6, c='tab:blue',
+                alpha=0.5, label="Cd (metoda Vh)")
+    ax0.scatter(D['M'][valid], D['Cd_check'][valid], s=4, c='tab:orange',
+                alpha=0.3, marker='x', label="Cd (weryfikacja V_total)")
+    if bins:
+        Ma_b  = [b[0] for b in bins]
+        Cd_b  = [b[1] for b in bins]
+        Cd_sd = [b[2] for b in bins]
+        ax0.errorbar(Ma_b, Cd_b, yerr=Cd_sd, fmt='ro-', ms=6, lw=1.5,
+                     capsize=3, label="mediana ± sd (koszyki)")
     ax0.axhline(0, color='k', lw=0.5)
-    ax0.set_xlabel("Mach"); ax0.set_ylabel("Cd"); ax0.set_ylim(-0.2, 1.5)
-    ax0.set_title("Cd vs Mach (zniżanie)"); ax0.legend(fontsize=7); ax0.grid(alpha=0.3)
+    ax0.set_xlabel("Mach (V_total)"); ax0.set_ylabel("Cd")
+    ax0.set_ylim(-0.1, 1.2)
+    ax0.set_title("Cd vs Mach — faza zniżania (GPS)")
+    ax0.legend(fontsize=7); ax0.grid(alpha=0.3)
 
-    # 2. Cd vs 1/q — liniowość biasu
+    # 2. Predkosci vs czas
     ax1 = axes[0, 1]
-    inv_q = 1.0 / np.where(D['q'] > 0.1, D['q'], np.nan)
-    ax1.scatter(inv_q, D['Cd_axial'], s=4, c='tab:red', alpha=0.3, label="Cd_raw")
-    if bias:
-        q_line = np.linspace(np.nanmin(D['q']), np.nanmax(D['q']), 100)
-        cd_line = bias['Cd0'] + bias['C'] / q_line
-        ax1.plot(1/q_line, cd_line, 'b-', lw=1.5,
-                 label=f"fit: Cd0={bias['Cd0']:.3f} b={bias['b_est']:+.4f}g")
-    ax1.set_xlabel("1/q [m²/N]"); ax1.set_ylabel("Cd_raw")
-    ax1.set_title("Bias test: Cd vs 1/q  (liniowy = stały bias)")
-    ax1.legend(fontsize=8); ax1.grid(alpha=0.3)
+    ax1.plot(D['t'], D['Vh'],      'b-',  lw=1,   label="Vh (GPS)")
+    ax1.plot(D['t'], D['V_total'], 'r-',  lw=1.2, label="V_total = sqrt(Vh²+Vz²)")
+    ax1.plot(D['t'], np.abs(D['Vz']), 'g--', lw=0.8, label="|Vz| = |dh/dt|")
+    ax1.axvline(t_apo, color='m', ls='--', lw=1, label="apogeum")
+    if 't_chute' in dir():
+        ax1.axvline(t_chute, color='k', ls=':', lw=1, label="spadochron")
+    ax1.set_xlabel("Czas [s]"); ax1.set_ylabel("V [m/s]")
+    ax1.set_title("Predkosci GPS vs czas")
+    ax1.legend(fontsize=7); ax1.grid(alpha=0.3)
 
-    # 3. gamma i a_drag vs czas
+    # 3. gamma i Cd vs czas
     ax2 = axes[1, 0]
-    ax2.plot(D['t'], D['a_drag'], '-', lw=0.8, c='tab:red',  label="a_drag")
-    ax2.plot(D['t'], D['lat'],    '-', lw=0.6, c='gray', alpha=0.6, label="|lat|")
+    ax2.plot(D['t'][valid], D['Cd'][valid], 'b-', lw=1, label="Cd (GPS)")
     ax2_r = ax2.twinx()
-    ax2_r.plot(D['t'], np.degrees(D['gamma']), '--', lw=0.8,
-               c='tab:green', alpha=0.8, label="gamma")
+    ax2_r.plot(D['t'][valid], np.degrees(D['gamma'][valid]),
+               '--', lw=0.8, c='tab:green', alpha=0.8, label="gamma [°]")
     ax2_r.set_ylabel("gamma [°]", color='tab:green')
-    ax2.set_xlabel("Czas [s]"); ax2.set_ylabel("a [m/s²]")
-    ax2.set_title("a_drag i gamma vs czas"); ax2.legend(fontsize=7); ax2.grid(alpha=0.3)
+    ax2.set_xlabel("Czas [s]"); ax2.set_ylabel("Cd")
+    ax2.set_ylim(-0.1, 1.5)
+    ax2.set_title("Cd i gamma vs czas")
+    ax2.legend(fontsize=7, loc='upper left'); ax2.grid(alpha=0.3)
 
-    # 4. h i V vs czas z zaznaczonym apogeum
+    # 4. h i V vs czas (pelny lot)
     ax3 = axes[1, 1]
     ax3b = ax3.twinx()
     ax3.plot(t, tel.alt_onboard, 'b-', lw=1, label="h GPS")
-    ax3b.plot(t, tel.vel_onboard, 'g-', lw=1, label="V GPS")
+    ax3b.plot(t, tel.vel_onboard, 'g-', lw=1, alpha=0.7, label="Vh GPS")
     ax3.axvline(t[i_apo], color='m', ls='--', lw=1.2, label="apogeum")
     ax3.axvline(t[i_bo],  color='k', ls='--', lw=1,   label="burnout")
     ax3.set_xlabel("Czas [s]"); ax3.set_ylabel("h [m]", color='b')
-    ax3b.set_ylabel("V [m/s]", color='g')
+    ax3b.set_ylabel("Vh [m/s]", color='g')
     ax3.set_title("Trajektoria (fiolet=apo, czarny=burnout)")
     ax3.legend(fontsize=7); ax3.grid(alpha=0.3)
 
@@ -386,7 +381,7 @@ def analyze(tel, cfg, S, flight_no, out_png):
     plt.savefig(out_png, dpi=140, bbox_inches="tight")
     plt.close()
     print(f"  Zapisano: {out_png}")
-    return D, bias
+    return D
 
 
 def main():
