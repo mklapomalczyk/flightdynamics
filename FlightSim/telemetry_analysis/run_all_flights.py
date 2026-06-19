@@ -22,6 +22,7 @@ Usage:
 """
 
 import sys
+import csv
 import argparse
 import numpy as np
 from pathlib import Path
@@ -178,6 +179,50 @@ def print_summary(diag_results, cd_tepa, group_tepa, cd_ostra, group_ostra):
 
 
 # --------------------------------------------------------------------------
+def save_diag_csv(diag_results, out_dir):
+    """Zapisuje per-flight Cd diagnostyczny do CSV."""
+    if not diag_results:
+        return None
+    csv_path = Path(out_dir) / "diag_drag_summary.csv"
+    fieldnames = ["flight_no", "nose", "Cd_med", "Ma_min", "Ma_max"]
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for fno, r in sorted(diag_results.items()):
+            writer.writerow(dict(
+                flight_no=fno, nose=r["nose"],
+                Cd_med=r["Cd_med"], Ma_min=r["Ma_min"], Ma_max=r["Ma_max"],
+            ))
+    print(f"Zapisano: {csv_path}")
+    return csv_path
+
+
+def save_cd_curve_csv(cd_tepa, group_tepa, cd_ostra, group_ostra, out_dir):
+    """Zapisuje dopasowane krzywe Cd(Ma) (oba typy nosa) do jednego CSV."""
+    csv_path = Path(out_dir) / "fit_cd_mach_curves.csv"
+    fieldnames = ["nose", "flights", "Mach", "Cd"]
+    rows_out = []
+    if cd_tepa is not None:
+        flights_str = "_".join(str(f) for f in group_tepa)
+        for ma, cd in zip(fcm.MA_NODES, cd_tepa):
+            rows_out.append(dict(nose="tepa", flights=flights_str,
+                                  Mach=round(float(ma), 4), Cd=round(float(cd), 4)))
+    if cd_ostra is not None:
+        flights_str = "_".join(str(f) for f in group_ostra)
+        for ma, cd in zip(fcm.MA_NODES, cd_ostra):
+            rows_out.append(dict(nose="ostra", flights=flights_str,
+                                  Mach=round(float(ma), 4), Cd=round(float(cd), 4)))
+    if not rows_out:
+        return None
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows_out)
+    print(f"Zapisano: {csv_path}")
+    return csv_path
+
+
+# --------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Batch drag validation")
     parser.add_argument("--n_starts", type=int, default=15,
@@ -222,6 +267,10 @@ def main():
     # 4. Podsumowanie
     if diag_results:
         print_summary(diag_results, cd_tepa, group_tepa, cd_ostra, group_ostra)
+
+    # 5. Zapis CSV
+    save_diag_csv(diag_results, out_dir)
+    save_cd_curve_csv(cd_tepa, group_tepa, cd_ostra, group_ostra, out_dir)
 
     print(f"\nWyniki zapisane w: {out_dir}")
 
