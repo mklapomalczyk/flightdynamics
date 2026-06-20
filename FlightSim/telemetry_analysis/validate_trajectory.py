@@ -104,13 +104,17 @@ def simulate_ascent(tel, cfg, cal, curves, t_max_pad=10.0):
         T = thrust_at(tt)
         m = mass_at(tt)
 
+        # Ciag dziala wzdluz osi rakiety (kat elewacji ze startu) -- w krotkim
+        # czasie spalania (~1-2s) rakieta stabilizowana spinem nie "skreca"
+        # w strone wektora predkosci. Opor zawsze przeciwny do V_total.
+        dirT_h, dirT_z = np.cos(elev), np.sin(elev)
         if V_total > 1.0:
-            dirh, dirz = Vh / V_total, Vz / V_total
+            dirD_h, dirD_z = Vh / V_total, Vz / V_total
         else:
-            dirh, dirz = np.cos(elev), np.sin(elev)
+            dirD_h, dirD_z = dirT_h, dirT_z
 
-        ax = (T * dirh - D * dirh) / m
-        az = (T * dirz - D * dirz) / m - G0
+        ax = (T * dirT_h - D * dirD_h) / m
+        az = (T * dirT_z - D * dirD_z) / m - G0
         return [Vz, ax, az]
 
     def apogee_event(tt, state):
