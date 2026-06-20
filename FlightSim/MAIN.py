@@ -38,7 +38,7 @@ geo     = GeoModule(mission)
     # Cmq       = -500.,
 # )
 
-aero_model= get_aero_model("rocket_70mm_baseline", method="missile_datcom", force_rerun=True)
+aero_model= get_aero_model("rocket_70mm_baseline", method="missile_datcom", force_rerun=False)
 
 atm = create_atmosphere("ISA")
 
