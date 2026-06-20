@@ -182,10 +182,40 @@ def save_calibration_csv(results, out_dir):
     return csv_path
 
 
-def save_aggregate_csv(results, out_dir, n_grid=101):
+def burn_time_stats(results):
+    """Srednia i odchylenie standardowe rzeczywistego czasu spalania [s]."""
+    t_burns = np.array([r["t_burn"] for r in results])
+    return dict(
+        mean=float(np.mean(t_burns)), std=float(np.std(t_burns)),
+        min=float(np.min(t_burns)), max=float(np.max(t_burns)),
+        n=len(t_burns), per_flight={r["flight_no"]: r["t_burn"] for r in results},
+    )
+
+
+def save_burn_time_csv(bstats, out_dir):
+    csv_path = Path(out_dir) / "burn_time_stats.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["flight_no", "t_burn_s"])
+        for fno, tb in sorted(bstats["per_flight"].items()):
+            writer.writerow([fno, f"{tb:.4f}"])
+        writer.writerow([])
+        writer.writerow(["mean_s", f"{bstats['mean']:.4f}"])
+        writer.writerow(["std_s", f"{bstats['std']:.4f}"])
+        writer.writerow(["min_s", f"{bstats['min']:.4f}"])
+        writer.writerow(["max_s", f"{bstats['max']:.4f}"])
+        writer.writerow(["n_flights", bstats["n"]])
+    return csv_path
+
+
+def save_aggregate_csv(results, out_dir, bstats, n_grid=101):
     """
     Resampluje T(t) kazdego lotu na wspolna os t/t_burn (0..1) i liczy
     srednia oraz odchylenie standardowe miedzy lotami w kazdym punkcie.
+
+    Dodatkowo: t_abs_mean_s = frac * mean(t_burn) — przyblizona os
+    czasu w sekundach (uzywajac SREDNIEGO czasu spalania), do orientacji
+    rzeczywistej dlugosci spalania (nie tylko znormalizowanej).
     """
     frac_grid = np.linspace(0.0, 1.0, n_grid)
     T_matrix = []
@@ -197,19 +227,20 @@ def save_aggregate_csv(results, out_dir, n_grid=101):
 
     T_mean = T_matrix.mean(axis=0)
     T_std  = T_matrix.std(axis=0)
+    t_abs_mean = frac_grid * bstats["mean"]
 
     csv_path = Path(out_dir) / "thrust_mean_std.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["t_frac_burn", "T_mean_N", "T_std_N", "n_flights"])
-        for frac, mu, sd in zip(frac_grid, T_mean, T_std):
-            writer.writerow([f"{frac:.4f}", f"{mu:.3f}", f"{sd:.3f}", len(results)])
+        writer.writerow(["t_frac_burn", "t_abs_mean_s", "T_mean_N", "T_std_N", "n_flights"])
+        for frac, t_abs, mu, sd in zip(frac_grid, t_abs_mean, T_mean, T_std):
+            writer.writerow([f"{frac:.4f}", f"{t_abs:.4f}", f"{mu:.3f}", f"{sd:.3f}", len(results)])
 
     return csv_path, frac_grid, T_mean, T_std, T_matrix
 
 
 # --------------------------------------------------------------------------
-def plot_results(results, frac_grid, T_mean, T_std, T_matrix, out_dir):
+def plot_results(results, frac_grid, T_mean, T_std, T_matrix, bstats, out_dir):
     fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
 
     ax0 = axes[0]
@@ -221,12 +252,21 @@ def plot_results(results, frac_grid, T_mean, T_std, T_matrix, out_dir):
     ax0.legend(fontsize=8); ax0.grid(alpha=0.3)
 
     ax1 = axes[1]
-    t_frac_abs = frac_grid   # znormalizowany czas spalania
-    ax1.plot(t_frac_abs, T_mean, 'b-', lw=2, label="T_mean")
-    ax1.fill_between(t_frac_abs, T_mean - T_std, T_mean + T_std,
+    t_abs_mean = frac_grid * bstats["mean"]
+    ax1.plot(frac_grid, T_mean, 'b-', lw=2, label="T_mean")
+    ax1.fill_between(frac_grid, T_mean - T_std, T_mean + T_std,
                      alpha=0.25, color='b', label="±1 std (rozrzut miedzy lotami)")
     ax1.set_xlabel("Znormalizowany czas spalania t/t_burn"); ax1.set_ylabel("Ciag T [N]")
-    ax1.set_title(f"Zagregowana krzywa ciagu ({len(results)} lotow)")
+    ax1.set_title(f"Zagregowana krzywa ciagu ({len(results)} lotow)  "
+                  f"t_burn={bstats['mean']:.2f}±{bstats['std']:.2f}s")
+
+    # druga os X: przyblizone sekundy (skala przez sredni czas spalania)
+    ax1_top = ax1.twiny()
+    ax1_top.set_xlim(ax1.get_xlim())
+    ax1_top.set_xticks(frac_grid[::20])
+    ax1_top.set_xticklabels([f"{v:.2f}" for v in t_abs_mean[::20]])
+    ax1_top.set_xlabel("Przyblizony czas [s] (wg sredniego t_burn)")
+
     ax1.legend(fontsize=8); ax1.grid(alpha=0.3)
 
     plt.tight_layout()
@@ -271,13 +311,22 @@ def main():
         return
 
     save_calibration_csv(results, out_dir)
-    csv_path, frac_grid, T_mean, T_std, T_matrix = save_aggregate_csv(results, out_dir)
+
+    bstats = burn_time_stats(results)
+    save_burn_time_csv(bstats, out_dir)
+
+    csv_path, frac_grid, T_mean, T_std, T_matrix = save_aggregate_csv(results, out_dir, bstats)
     print(f"Zapisano: {csv_path}")
 
-    plot_results(results, frac_grid, T_mean, T_std, T_matrix, out_dir)
+    plot_results(results, frac_grid, T_mean, T_std, T_matrix, bstats, out_dir)
 
     print(f"\nPodsumowanie ({len(results)} lotow):")
-    print(f"  T_mean peak = {T_mean.max():.1f} N przy t/t_burn={frac_grid[np.argmax(T_mean)]:.2f}")
+    print(f"  Czas spalania t_burn = {bstats['mean']:.3f} ± {bstats['std']:.3f} s  "
+          f"(min={bstats['min']:.3f}s  max={bstats['max']:.3f}s)")
+    for fno, tb in sorted(bstats["per_flight"].items()):
+        print(f"    lot {fno}: t_burn={tb:.3f}s")
+    print(f"  T_mean peak = {T_mean.max():.1f} N przy t/t_burn={frac_grid[np.argmax(T_mean)]:.2f}  "
+          f"(~{frac_grid[np.argmax(T_mean)]*bstats['mean']:.2f}s)")
     print(f"  T_std peak  = {T_std[np.argmax(T_mean)]:.1f} N "
           f"({100*T_std[np.argmax(T_mean)]/T_mean.max():.1f}% rozrzutu)")
 
