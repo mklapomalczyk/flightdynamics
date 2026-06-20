@@ -47,7 +47,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from telemetry_parser import parse_telemetry, get_data_dir
 from imu_reconstruction import detect_ignition
-from diag_drag import load_config, isa, detect_events, calib_acc_scale, S, G0
+from diag_drag import (load_config, isa, detect_events, calib_acc_scale, S, G0,
+                        baro_altitude, smooth_gps_derivative)
 from run_all_flights import read_configs, check_data_exists
 
 
@@ -101,7 +102,6 @@ def process_flight(fno, cfg, nose, curves, base):
     tt  = t[win] - t[i_ign]                          # czas od zaplonu [s]
     ax_meas = tel.acc_x[win] * acc_scale * G0          # specific force [m/s^2]
     Pc      = tel.press_cham[win]                      # [bar]
-    h0      = tel.alt_onboard[i_ign]
     elev    = np.radians(cfg["elevation"])
 
     # --- masa: model liniowy m_rocket -> m_coast w czasie t_burn ---
@@ -110,12 +110,23 @@ def process_flight(fno, cfg, nose, curves, base):
     frac_burn    = np.clip(tt / t_burn, 0.0, 1.0)
     m_t = m_rocket - m_propellant * frac_burn
 
-    # --- kinematyczna predkosc/wysokosc (do znalezienia Ma(t)) ---
-    # dV/dt = a_meas - g*sin(elev)  (specific force NIE zawiera grawitacji)
-    a_kin = ax_meas - G0 * np.sin(elev)
-    V = np.concatenate([[0.0], np.cumsum(0.5 * (a_kin[1:] + a_kin[:-1]) * np.diff(tt))])
-    Vz = V * np.sin(elev)
-    h  = h0 + np.concatenate([[0.0], np.cumsum(0.5 * (Vz[1:] + Vz[:-1]) * np.diff(tt))])
+    if tel.press_amb is not None:
+        # --- wysokosc/predkosc z barometru (250Hz, bez biasu/calkowania IMU) ---
+        # h(t) z odwrocenia ISA na cisnieniu otoczenia, zakotwiczone w t_ign.
+        # Vz = dh/dt (pochodna baro, mala szczelina, bo dane juz sa 250Hz/gladkie).
+        # Predkosc calkowita V = Vz/sin(elev), zakladajac lot wzdluz osi rakiety
+        # (mala katy natarcia podczas spalania, kat trajektorii ~ kat elewacji).
+        h_full = baro_altitude(tel, i_ign)
+        h  = h_full[win]
+        Vz = smooth_gps_derivative(h, tt, window_s=0.05)
+        V  = np.abs(Vz) / max(np.sin(elev), 0.1)
+    else:
+        # Brak barometru w tej telemetrii -> fallback: kinematyczna calka IMU
+        h0    = tel.alt_onboard[i_ign]
+        a_kin = ax_meas - G0 * np.sin(elev)
+        V  = np.concatenate([[0.0], np.cumsum(0.5*(a_kin[1:]+a_kin[:-1])*np.diff(tt))])
+        Vz = V * np.sin(elev)
+        h  = h0 + np.concatenate([[0.0], np.cumsum(0.5*(Vz[1:]+Vz[:-1])*np.diff(tt))])
 
     rho, a_snd, _, _ = isa(h)
     Ma = V / np.maximum(a_snd, 1.0)

@@ -93,6 +93,44 @@ def isa(h):
     return rho, a, T, p
 
 
+def baro_altitude(tel, i_anchor):
+    """
+    Wysokosc z barometru (250 Hz, bez schodkowej charakterystyki GPS).
+
+    Cisnienie otoczenia (tel.press_amb [hPa]) jest dostepne z pelna
+    czestotliwoscia telemetrii (250 Hz), w przeciwienstwie do GPS (~4-10 Hz).
+    Odwracamy model ISA (troposfera) zakotwiczajac go w punkcie referencyjnym
+    (np. tuz przed zaplonem), gdzie znamy zarowno cisnienie barometru jak
+    i wysokosc GPS — to eliminuje potrzebe znajomosci cisnienia na poziomie
+    morza (QNH), ktore nie jest znane.
+
+    h(t) = h_anchor + (T_anchor/L) * (1 - (p(t)/p_anchor)^(1/5.2561))
+    gdzie L = 0.0065 K/m (gradient ISA), T_anchor = 288.15 - L*h_anchor.
+
+    Zwraca wysokosc baro [m ASL], skalowana do tej samej referencji co
+    tel.alt_onboard (GPS) w punkcie i_anchor.
+    """
+    if tel.press_amb is None:
+        return tel.alt_onboard.copy()
+    p = tel.press_amb.astype(float) * 100.0   # hPa -> Pa
+    # czujnik czasem zwraca 0/martwa wartosc -- traktuj jako brak danych
+    p = np.where(p > 30000.0, p, np.nan)       # < 300 hPa = niefizyczne dla tej rakiety
+    if np.sum(np.isfinite(p)) < 0.5 * len(p):
+        return tel.alt_onboard.copy()
+    if not np.isfinite(p[i_anchor]):
+        finite = np.where(np.isfinite(p))[0]
+        if len(finite) == 0:
+            return tel.alt_onboard.copy()
+        i_anchor = finite[np.argmin(np.abs(finite - i_anchor))]
+    h_anchor = tel.alt_onboard[i_anchor]
+    p_anchor = p[i_anchor]
+    T_anchor = 288.15 - 0.0065 * h_anchor
+    L = 0.0065
+    with np.errstate(invalid='ignore'):
+        h = h_anchor + (T_anchor / L) * (1.0 - (p / p_anchor) ** (1.0 / 5.2561))
+    return h
+
+
 def calib_acc_scale(tel, t_ign):
     """Skala akcelerometru z |a|=1g w spoczynku (t < t_ign-0.5)."""
     rest = tel.time < (t_ign - 0.5)
@@ -174,12 +212,14 @@ def smooth_gps_derivative(signal, t_arr, window_s=0.6):
     return np.gradient(smoothed, t_safe)
 
 
-def cd_on(tel, mask, m_coast, S, acc_scale=None):
+def cd_on(tel, mask, m_coast, S, acc_scale=None, h_full=None):
     """
-    Cd z fazy balistycznej — metoda czysto GPS.
+    Cd z fazy balistycznej — metoda czysto GPS (pozioma predkosc) +
+    wysokosc barometryczna (pionowa predkosc).
 
     Kolumna GPS 'Predkosc lotu' zawiera pozioma predkosc Vh (ground speed 2D).
-    Predkosc pionowa Vz = dh/dt z wysokosci GPS.
+    Predkosc pionowa Vz = dh/dt z wysokosci barometru (250 Hz, gladka, bez
+    schodkow GPS) zamiast wysokosci GPS (~4-10 Hz).
     Predkosc calkowita: V_total = sqrt(Vh^2 + Vz^2).
     Dynamika pozioma (bez ciagu):
         m * dVh/dt = -D * (Vh/V_total)
@@ -188,13 +228,17 @@ def cd_on(tel, mask, m_coast, S, acc_scale=None):
         Cd = D / (q * S)  gdzie q = 0.5 * rho * V_total^2
 
     Nie uzywa IMU — brak bledu od wirowania rakiety / biasu akcelerometru.
+
+    h_full: opcjonalna wysokosc barometryczna dla calego lotu (z baro_altitude),
+            jesli podana uzywana jest do Vz i atmosfery zamiast GPS.
     """
     t_m = tel.time[mask]
     Vh  = tel.vel_onboard[mask]      # pozioma predkosc GPS [m/s]
-    h   = tel.alt_onboard[mask]      # wysokosc GPS (MSL) [m]
+    h   = h_full[mask] if h_full is not None else tel.alt_onboard[mask]
 
-    # Predkosc pionowa z pochodnej wysokosci GPS
-    Vz = smooth_gps_derivative(h, t_m, window_s=0.5)
+    # Predkosc pionowa z pochodnej wysokosci (baro: mniejsze okno, brak schodkow)
+    win_s = 0.15 if h_full is not None else 0.5
+    Vz = smooth_gps_derivative(h, t_m, window_s=win_s)
 
     # Calkowita predkosc i kat toru
     V_total = np.sqrt(Vh**2 + Vz**2)
@@ -272,7 +316,10 @@ def analyze(tel, cfg, S, flight_no, out_png):
     if np.sum(des) < 20:
         print("  [BLAD] Za malo probek w fazie znizania"); return None
 
-    D = cd_on(tel, des, m_coast, S)
+    # Wysokosc barometryczna (250Hz), zakotwiczona w GPS tuz przed zaplonem
+    h_baro = baro_altitude(tel, i_ign)
+
+    D = cd_on(tel, des, m_coast, S, h_full=h_baro)
 
     # Odrzuc punkty przed stabilizacja (pierwsze 2s po apogeum)
     t_apo = t[i_apo]

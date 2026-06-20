@@ -30,7 +30,7 @@ from scipy.integrate import solve_ivp
 
 from telemetry_parser import parse_telemetry, get_data_dir
 from imu_reconstruction import detect_ignition
-from diag_drag import load_config, isa, calib_acc_scale, detect_events, smooth_gps_derivative
+from diag_drag import load_config, isa, calib_acc_scale, detect_events, smooth_gps_derivative, baro_altitude
 
 G0    = 9.80665
 D_CAL = 0.070
@@ -133,12 +133,12 @@ def prepare_flight(tel, cfg, t_offset_apo=2.0, min_points=30):
 
     t_offset_apo: ile sekund po apogeum brac jako punkt startowy modelu
     """
-    t    = tel.time
-    h    = tel.alt_onboard
-    V    = tel.vel_onboard       # Vh (pozioma)
-    N    = len(t)
-
+    t     = tel.time
     t_ign = detect_ignition(tel)
+    h     = baro_altitude(tel, int(np.argmin(np.abs(t - t_ign))))
+    V     = tel.vel_onboard       # Vh (pozioma)
+    N     = len(t)
+
     _, _, i_apo, i_end = detect_events(tel, t_ign)
     t_apo = t[i_apo]
 
@@ -147,8 +147,8 @@ def prepare_flight(tel, cfg, t_offset_apo=2.0, min_points=30):
     if i_start >= N - min_points:
         i_start = i_apo + 5
 
-    # Predkosc pionowa z pochodnej wysokosci — uzywamy okna +-2s dla stabilnosci
-    Vz_full = smooth_gps_derivative(h, t, window_s=0.6)
+    # Predkosc pionowa z pochodnej wysokosci barometrycznej (250Hz, gladka, bez schodkow GPS)
+    Vz_full = smooth_gps_derivative(h, t, window_s=0.15)
     Vz0 = float(Vz_full[i_start])
     Vh0 = float(V[i_start])
     h0  = float(h[i_start])
