@@ -101,6 +101,23 @@ def bin_field_cd(Ma, Cd, lo, hi, step, min_n=5):
     return np.array(centers), np.array(meds), np.array(stds), np.array(ns)
 
 
+def load_fit_cd_curve(csv_path, nose):
+    """Wczytuje dopasowana krzywa Cd(Ma) (ballistic fit wznoszenia,
+    fit_cd_mach.py / run_all_flights.py) dla danego nosa z
+    fit_cd_mach_curves.csv. Zwraca (Ma, Cd) lub (None, None) gdy brak."""
+    if not Path(csv_path).exists():
+        return None, None
+    pairs = []
+    with open(csv_path, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            if row["nose"] == nose:
+                pairs.append((float(row["Mach"]), float(row["Cd"])))
+    if not pairs:
+        return None, None
+    pairs.sort(key=lambda p: p[0])
+    return np.array([p[0] for p in pairs]), np.array([p[1] for p in pairs])
+
+
 # --------------------------------------------------------------------------
 def load_datcom_ca0(pkl_path):
     with open(pkl_path, "rb") as f:
@@ -147,8 +164,14 @@ def main():
     if len(centers) == 0:
         raise RuntimeError("Brak binow Mach z wystarczajaca liczba punktow — zmniejsz --min_n lub poszerz zakres.")
 
+    out_dir = Path(base) / "results"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     mach_datcom, ca0_datcom = load_datcom_ca0(pkl_path)
     ca0_at_centers = np.interp(centers, mach_datcom, ca0_datcom)
+
+    fit_csv = out_dir / "fit_cd_mach_curves.csv"
+    mach_fit, cd_fit = load_fit_cd_curve(fit_csv, args.nose)
 
     print(f"\n{'Mach':>6} {'Cd_pole':>8} {'std':>6} {'n':>5} {'Cd_DATCOM':>10} {'diff':>7} {'wewn. band?':>12}")
     rows = []
@@ -161,8 +184,6 @@ def main():
                           Cd_datcom=round(float(d), 4), diff=round(float(diff), 4),
                           inside_band=inside))
 
-    out_dir = Path(base) / "results"
-    out_dir.mkdir(parents=True, exist_ok=True)
     tag = f"{args.nose}"
     csv_path = out_dir / f"cd_datcom_vs_field_{tag}.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -176,6 +197,9 @@ def main():
                  color='tab:blue', label=f"testy polowe — '{args.nose}' (mediana ± sd, bin-do-bin)")
     ax.plot(mach_datcom, ca0_datcom, 's--', ms=6, lw=1.5, color='tab:red',
              label=f"DATCOM CA(alpha=0) — {args.case}")
+    if mach_fit is not None:
+        ax.plot(mach_fit, cd_fit, '^-', ms=5, lw=1.3, color='tab:green',
+                 label=f"Cd(Ma) dopasowany do wznoszenia (fit_cd_mach) — '{args.nose}'")
     ax.set_xlim(args.ma_lo - 0.02, args.ma_hi + 0.1)
     ax.set_xlabel("Mach")
     ax.set_ylabel("Cd")
