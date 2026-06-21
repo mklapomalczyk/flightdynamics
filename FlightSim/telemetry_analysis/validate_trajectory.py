@@ -38,7 +38,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from telemetry_parser import parse_telemetry, get_data_dir
 from imu_reconstruction import detect_ignition
-from diag_drag import load_config, isa, detect_events, baro_altitude, calib_acc_scale, S, G0
+from diag_drag import (load_config, isa, detect_events, baro_altitude,
+                        calib_acc_scale, smooth_gps_derivative, S, G0)
 from estimate_thrust import load_cd_curves, cd_at
 from run_all_flights import check_data_exists
 
@@ -137,19 +138,35 @@ def simulate_ascent(tel, cfg, cal, curves, t_max_pad=10.0):
 
     V_pred = np.sqrt(sol.y[1]**2 + sol.y[2]**2)
 
-    # Predkosc rzeczywista z calkowania akcelerometru wzdluz osi rakiety
-    # (specific force, bez grawitacji) — w przeciwienstwie do rozniczki
-    # baro/GPS, nie jest zaklocana czestymi skokami czujnika baro podczas
-    # wznoszenia (wibracje/przeciazenie). Ten sam typ rekonstrukcji jest
-    # juz uzywany jako fallback w estimate_thrust.py.
+    # Predkosc rzeczywista — hybryda dwoch niezaleznych pomiarow, kazdy
+    # uzywany tam, gdzie jest najwiarygodniejszy:
+    #   - spalanie (krotkie, ~1.5-2s): calkowanie akcelerometru (specific
+    #     force wzdluz osi rakiety) — duza czestotliwosc, ale blad narasta
+    #     z czasem calkowania, wiec ograniczamy okno do samego spalania.
+    #   - coast (do apogeum, kilkanascie sekund): GPS Vh (predkosc
+    #     doplerowska, nie dryfuje) + rozniczka baro dla Vz, z wykluczeniem
+    #     pojedynczych, niefizycznych skokow czujnika baro (np. >5m/4ms),
+    #     ktore w innym przypadku zanieczyszczalyby wygladzona pochodna.
     acc_scale, _ = calib_acc_scale(tel, t_ign_abs)
     seg = slice(i_ign, i_apo + 1)
     t_actual = t_rel_full[seg]
+
     a_meas = tel.acc_x[seg] * acc_scale * G0
     a_kin = a_meas - G0 * np.sin(elev)
-    V_actual = np.concatenate([[0.0],
+    V_acc = np.concatenate([[0.0],
         np.cumsum(0.5 * (a_kin[1:] + a_kin[:-1]) * np.diff(t_actual))])
-    V_actual = np.abs(V_actual)
+    V_acc = np.abs(V_acc)
+
+    Vz_baro = smooth_gps_derivative(h_baro, t, window_s=0.15)[seg]
+    Vh_gps = tel.vel_onboard[seg]
+    V_gps = np.sqrt(Vh_gps**2 + Vz_baro**2)
+    dh_step = np.abs(np.diff(h_baro[seg], prepend=h_baro[seg][0]))
+    half_win = int(0.15 / 0.004)
+    bad = np.convolve(dh_step > 5.0, np.ones(2 * half_win + 1), mode='same') > 0
+    V_gps = np.where(bad, np.nan, V_gps)
+
+    i_switch = int(np.argmin(np.abs(t_actual - (t_burn + 0.3))))
+    V_actual = np.concatenate([V_acc[:i_switch], V_gps[i_switch:]])
 
     return dict(
         t_rel=sol.t, h=sol.y[0], Vh=sol.y[1], Vz=sol.y[2], V=V_pred,
@@ -236,9 +253,9 @@ def plot_results(results, out_dir):
                   label=f"lot {r['flight_no']} (model)")
         ax1.plot(r["traj"]["t_actual"], r["traj"]["V_actual"], lw=1.0,
                   ls='--', color=col, alpha=0.7,
-                  label=f"lot {r['flight_no']} (akcelerometr)")
+                  label=f"lot {r['flight_no']} (akcel.+GPS/baro)")
     ax1.set_xlabel("Czas od zaplonu [s]"); ax1.set_ylabel("V [m/s]")
-    ax1.set_title("Predkosc calkowita: model vs faktyczna (przerywana, z akcelerometru)")
+    ax1.set_title("Predkosc calkowita: model vs faktyczna (przerywana, hybryda akcel./GPS+baro)")
     ax1.legend(fontsize=6); ax1.grid(alpha=0.3)
 
     ax2 = axes[2]
