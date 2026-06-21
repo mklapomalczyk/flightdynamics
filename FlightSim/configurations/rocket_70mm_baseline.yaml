@@ -92,13 +92,29 @@ mass_model:
 # Minimalna tabela: dwa punkty (prostokątny profil ciągu).
 propulsion:
   nozzle_diameter: 0.040   # średnica dyszy [m] — do obliczenia oporu dennego
+  # Profil ciągu z testów polowych (20 pkt): srednia T(t/t_burn) z 6 lotow
+  # (13,14,17,18,19,20 — lot 21 wylaczony, zla kalibracja R2=0.008),
+  # przeskalowana na sredni czas spalania t_burn=1.712s.
+  # Patrz: telemetry_analysis/estimate_thrust.py, results/thrust_mean_std.csv
   thrust_profile:
     #  t [s]   F [N]
-    - [0.000,  700.0]   # zapłon — pełny ciąg
-    - [1.800,  1500.0]   # koniec spalania
-    # Przykład profilu z wygaszaniem:
-    # - [0.000,  2500.0]
-    # - [0.200,  2800.0]
-    # - [1.600,  2800.0]
-    # - [1.800,   500.0]
-    # - [1.900,     0.0]
+    - [0.0000,  649.30]
+    - [0.0901,  634.44]
+    - [0.1802,  663.59]
+    - [0.2703,  710.12]
+    - [0.3604,  754.98]
+    - [0.4505,  814.59]
+    - [0.5406,  875.28]
+    - [0.6307,  939.24]
+    - [0.7208, 1008.60]
+    - [0.8109, 1071.56]
+    - [0.9011, 1132.11]
+    - [0.9912, 1189.06]
+    - [1.0813, 1239.32]
+    - [1.1714, 1308.10]
+    - [1.2615, 1374.13]
+    - [1.3516, 1420.41]
+    - [1.4417, 1460.61]
+    - [1.5318, 1352.55]
+    - [1.6219,  711.89]
+    - [1.7120,   27.42]
