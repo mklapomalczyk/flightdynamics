@@ -1,26 +1,29 @@
 """
 compare_cd_datcom.py
 =====================
-Porownanie Cd(Ma) z DATCOM (aero_table_missile.pkl, CA przy alpha=0)
-z Cd(Ma) wyznaczonym z testow polowych dla konfiguracji "ostra",
-w zakresie Ma 0.2-0.45 (gdzie mamy najwiecej wiarygodnych danych
-polowych, patrz fit_cd_mach_curves.csv / diag_drag).
+Porownanie Cd(Ma) z modelu DATCOM (aero_table_missile.pkl, CA przy
+alpha=0) z Cd(Ma) wyznaczonym z testow polowych, dla wybranej
+konfiguracji nosa (tepa/ostra) i zakresu Mach.
 
 Porownanie bin-do-bin (NIE mean-vs-mean):
-  - Dla kazdego lotu "ostra" licza sie punkty Cd(Ma) z fazy znizania
-    (metoda GPS+baro, diag_drag.cd_on), scalone ze wszystkich lotow.
-  - Te punkty sa binowane na siatce Ma (krok 0.025, jak w fit_cd_mach),
-    dajac median+std per bin (rozrzut miedzy-lotowy I wewnatrz-lotowy).
+  - Dla kazdego lotu w wybranej grupie licza sie punkty Cd(Ma) z fazy
+    znizania (metoda GPS+baro, diag_drag.cd_on), scalone ze wszystkich
+    lotow w grupie.
+  - Te punkty sa binowane na siatce Ma (krok --ma_step), dajac
+    median+std per bin (rozrzut miedzy-lotowy i wewnatrz-lotowy).
   - DATCOM CA(alpha=0) interpolowane na te sama siatke Ma.
   - Wynik: czy DATCOM lezy w paśmie błędu danych polowych, czy poza nim.
 
 Uzycie:
     python compare_cd_datcom.py
+    python compare_cd_datcom.py --nose tepa --ma_lo 0.2 --ma_hi 0.5
+    python compare_cd_datcom.py --case rocket_70mm_baseline --flights 14 15 16
 """
 
 import sys
 import csv
 import pickle
+import argparse
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -31,15 +34,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from telemetry_parser import parse_telemetry, get_data_dir
-from diag_drag import load_config, detect_events, baro_altitude, cd_on, bin_stats
+from diag_drag import load_config, detect_events, baro_altitude, cd_on, D_CAL
 from imu_reconstruction import detect_ignition
+from run_all_flights import read_configs, check_data_exists
 
-MA_LO, MA_HI, MA_STEP = 0.20, 0.45, 0.025
-OSTRA_FLIGHTS = [14, 15, 16, 18, 19, 20, 21]
-DATCOM_PKL = "datcom_runs/rocket_70mm_baseline/aero_table_missile.pkl"
+S = np.pi * D_CAL**2 / 4.0
 
 
 # --------------------------------------------------------------------------
+def flights_for_nose(base, nose):
+    """Numery lotow 'to analyze?==yes' o danym typie nosa (z configs.txt)."""
+    rows = read_configs(base)
+    return [r["fno"] for r in rows
+            if r["nose"] == nose and check_data_exists(base, r["fno"])]
+
+
 def collect_field_cd(base, flights):
     """Zbiera punkty Cd(Ma) z fazy znizania dla wszystkich podanych lotow."""
     Ma_all, Cd_all = [], []
@@ -58,7 +67,7 @@ def collect_field_cd(base, flights):
         if np.sum(des) < 20:
             continue
         h_baro = baro_altitude(tel, i_ign)
-        D = cd_on(tel, des, cfg["m_coast"], np.pi * 0.070**2 / 4.0, h_full=h_baro)
+        D = cd_on(tel, des, cfg["m_coast"], S, h_full=h_baro)
 
         t_apo = t[i_apo]
         valid = (D['t'] > t_apo + 2.0) & np.isfinite(D['Cd']) & (D['q'] > 100)
@@ -67,19 +76,24 @@ def collect_field_cd(base, flights):
             i_chute = np.where(valid & chute_mask)[0][0]
             valid = valid & (D['t'] < D['t'][i_chute])
 
+        if np.sum(valid) == 0:
+            print(f"  lot {fno}: 0 pkt — pomijam")
+            continue
         Ma_all.append(D['M'][valid])
         Cd_all.append(D['Cd'][valid])
         print(f"  lot {fno}: {np.sum(valid)} pkt (Ma {D['M'][valid].min():.2f}-{D['M'][valid].max():.2f})")
 
+    if not Ma_all:
+        raise RuntimeError("Brak punktow Cd z danych polowych dla podanych lotow.")
     return np.concatenate(Ma_all), np.concatenate(Cd_all)
 
 
-def bin_field_cd(Ma, Cd, lo=MA_LO, hi=MA_HI, step=MA_STEP):
+def bin_field_cd(Ma, Cd, lo, hi, step, min_n=5):
     edges = np.arange(lo, hi + step, step)
     centers, meds, stds, ns = [], [], [], []
     for a, b in zip(edges[:-1], edges[1:]):
         sel = (Ma >= a) & (Ma < b) & np.isfinite(Cd)
-        if np.sum(sel) >= 5:
+        if np.sum(sel) >= min_n:
             centers.append(0.5 * (a + b))
             meds.append(np.median(Cd[sel]))
             stds.append(np.std(Cd[sel]))
@@ -100,15 +114,38 @@ def load_datcom_ca0(pkl_path):
 
 # --------------------------------------------------------------------------
 def main():
+    parser = argparse.ArgumentParser(description="DATCOM vs field-test Cd(Ma) comparison")
+    parser.add_argument("--case", default="rocket_70mm_baseline",
+                        help="nazwa konfiguracji DATCOM (katalog w datcom_runs/)")
+    parser.add_argument("--nose", choices=["ostra", "tepa"], default="ostra",
+                        help="typ nosa (grupa lotow z configs.txt) do porownania")
+    parser.add_argument("--flights", nargs="*", type=int, default=None,
+                        help="recznie wybrane numery lotow (domyslnie wszystkie z --nose)")
+    parser.add_argument("--ma_lo", type=float, default=0.20)
+    parser.add_argument("--ma_hi", type=float, default=0.45)
+    parser.add_argument("--ma_step", type=float, default=0.025)
+    parser.add_argument("--min_n", type=int, default=5,
+                        help="minimalna liczba punktow w binie Mach, by go uwzglednic")
+    args = parser.parse_args()
+
     base = get_data_dir()
     root = Path(base).parent   # field_test_data -> FlightSim
-    pkl_path = root / DATCOM_PKL
+    pkl_path = root / "datcom_runs" / args.case / "aero_table_missile.pkl"
     if not pkl_path.exists():
-        raise FileNotFoundError(f"Brak {pkl_path}. Uruchom MAIN.py najpierw (generuje cache DATCOM).")
+        raise FileNotFoundError(
+            f"Brak {pkl_path}. Uruchom MAIN.py (z odpowiednim CASE_NAME) "
+            f"najpierw, aby wygenerowac cache DATCOM.")
 
-    print("Zbieranie punktow Cd(Ma) z testow polowych — konfiguracja 'ostra':")
-    Ma, Cd = collect_field_cd(base, OSTRA_FLIGHTS)
-    centers, meds, stds, ns = bin_field_cd(Ma, Cd)
+    flights = args.flights if args.flights else flights_for_nose(base, args.nose)
+    if not flights:
+        raise RuntimeError(f"Brak lotow dla nosa '{args.nose}' w configs.txt.")
+
+    print(f"Konfiguracja DATCOM: {args.case}   Nos: {args.nose}   Loty: {flights}")
+    print("Zbieranie punktow Cd(Ma) z testow polowych:")
+    Ma, Cd = collect_field_cd(base, flights)
+    centers, meds, stds, ns = bin_field_cd(Ma, Cd, args.ma_lo, args.ma_hi, args.ma_step, args.min_n)
+    if len(centers) == 0:
+        raise RuntimeError("Brak binow Mach z wystarczajaca liczba punktow — zmniejsz --min_n lub poszerz zakres.")
 
     mach_datcom, ca0_datcom = load_datcom_ca0(pkl_path)
     ca0_at_centers = np.interp(centers, mach_datcom, ca0_datcom)
@@ -125,7 +162,9 @@ def main():
                           inside_band=inside))
 
     out_dir = Path(base) / "results"
-    csv_path = out_dir / "cd_datcom_vs_field_ostra.csv"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tag = f"{args.nose}"
+    csv_path = out_dir / f"cd_datcom_vs_field_{tag}.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
@@ -134,17 +173,17 @@ def main():
 
     fig, ax = plt.subplots(figsize=(8, 6))
     ax.errorbar(centers, meds, yerr=stds, fmt='o-', ms=7, capsize=4, lw=1.5,
-                 color='tab:blue', label="testy polowe — 'ostra' (mediana ± sd, bin-do-bin)")
+                 color='tab:blue', label=f"testy polowe — '{args.nose}' (mediana ± sd, bin-do-bin)")
     ax.plot(mach_datcom, ca0_datcom, 's--', ms=6, lw=1.5, color='tab:red',
-             label="DATCOM CA(alpha=0)")
-    ax.set_xlim(MA_LO - 0.02, MA_HI + 0.1)
+             label=f"DATCOM CA(alpha=0) — {args.case}")
+    ax.set_xlim(args.ma_lo - 0.02, args.ma_hi + 0.1)
     ax.set_xlabel("Mach")
     ax.set_ylabel("Cd")
-    ax.set_title("Cd(Ma) — DATCOM vs testy polowe ('ostra'), zakres Ma 0.2-0.45")
+    ax.set_title(f"Cd(Ma) — DATCOM vs testy polowe ('{args.nose}'), zakres Ma {args.ma_lo}-{args.ma_hi}")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     plt.tight_layout()
-    out_png = out_dir / "cd_datcom_vs_field_ostra.png"
+    out_png = out_dir / f"cd_datcom_vs_field_{tag}.png"
     plt.savefig(out_png, dpi=140, bbox_inches="tight")
     plt.close()
     print(f"Zapisano: {out_png}")
