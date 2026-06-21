@@ -117,6 +117,22 @@ def actual_apogees(base, flights):
     return out
 
 
+def actual_v_max(base, flights):
+    """V_max (hybryda akcel./GPS+baro, validate_trajectory.py) dla podanych
+    lotow, czytane z trajectory_closure_summary.csv — niezalezne dane
+    referencyjne."""
+    csv_path = Path(base) / "results" / "trajectory_closure_summary.csv"
+    out = {}
+    if not csv_path.exists():
+        return out
+    with open(csv_path, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            fno = int(row["flight_no"])
+            if fno in flights and row.get("V_max_actual_mps"):
+                out[fno] = float(row["V_max_actual_mps"])
+    return out
+
+
 # --------------------------------------------------------------------------
 def simulate_one(cfg, mach_ca, ca0, thrust_frac, thrust_mean, scale, t_burn,
                   h0=100.0, t_max_pad=10.0):
@@ -171,9 +187,12 @@ def simulate_one(cfg, mach_ca, ca0, thrust_frac, thrust_mean, scale, t_burn,
     sol = solve_ivp(rhs, t_span, [h0, 0.0, 0.0], events=apogee_event,
                      max_step=0.02, rtol=1e-7, atol=1e-6)
 
+    V_total = np.sqrt(sol.y[1]**2 + sol.y[2]**2)
+    V_max = float(np.max(V_total))
+
     if len(sol.t_events[0]) == 0:
-        return float(sol.t[-1]), float(sol.y[0, -1])
-    return float(sol.t_events[0][0]), float(sol.y_events[0][0][0])
+        return float(sol.t[-1]), float(sol.y[0, -1]), V_max
+    return float(sol.t_events[0][0]), float(sol.y_events[0][0][0]), V_max
 
 
 # --------------------------------------------------------------------------
@@ -198,6 +217,7 @@ def main():
     mach_ca, ca0 = load_datcom_ca0(pkl_path)
     cfg, flights = nominal_config(base, args.nose)
     actual = actual_apogees(base, flights)
+    actual_v = actual_v_max(base, flights)
 
     # rozrzut wzgledny amplitudy ciagu (pomijajac pierwsze/ostatnie probki, gdzie
     # T_mean->0 i T_std/T_mean rozdmuchuje sie sztucznie)
@@ -214,12 +234,13 @@ def main():
     rng = np.random.default_rng(args.seed)
     h_apo = np.empty(args.n)
     t_apo = np.empty(args.n)
+    v_max = np.empty(args.n)
     for i in range(args.n):
         scale = max(rng.normal(1.0, rel_std), 0.3)
         t_burn = float(np.clip(rng.normal(burn["mean_s"], burn["std_s"]),
                                 burn["min_s"], burn["max_s"]))
-        t_apo[i], h_apo[i] = simulate_one(cfg, mach_ca, ca0, thrust_frac, thrust_mean,
-                                           scale, t_burn)
+        t_apo[i], h_apo[i], v_max[i] = simulate_one(cfg, mach_ca, ca0, thrust_frac,
+                                                      thrust_mean, scale, t_burn)
 
     print(f"\nMonte Carlo ({args.n} przebiegow), apogeum:")
     print(f"  predykcja: mean={np.mean(h_apo):.1f} m  std={np.std(h_apo):.1f} m  "
@@ -232,29 +253,58 @@ def main():
         bias_pct = 100.0 * (np.mean(h_apo) - np.mean(act_vals)) / np.mean(act_vals)
         print(f"  systematyczne odchylenie modelu (mean_pred vs mean_actual): {bias_pct:+.1f}%")
 
+    print(f"\nMonte Carlo ({args.n} przebiegow), V_max:")
+    print(f"  predykcja: mean={np.mean(v_max):.1f} m/s  std={np.std(v_max):.1f} m/s  "
+          f"[{np.min(v_max):.1f}, {np.max(v_max):.1f}]")
+    if actual_v:
+        actv_vals = np.array(list(actual_v.values()))
+        print(f"  rzeczywiste V_max (akcel.+GPS/baro, loty {list(actual_v.keys())}): "
+              f"mean={np.mean(actv_vals):.1f} m/s  std={np.std(actv_vals):.1f} m/s  "
+              f"[{np.min(actv_vals):.1f}, {np.max(actv_vals):.1f}]")
+        bias_v_pct = 100.0 * (np.mean(v_max) - np.mean(actv_vals)) / np.mean(actv_vals)
+        print(f"  systematyczne odchylenie modelu (mean_pred vs mean_actual): {bias_v_pct:+.1f}%")
+
     csv_path = out_dir / f"monte_carlo_apogee_{args.nose}.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["run", "h_apo_pred_m", "t_apo_pred_s"])
+        writer.writerow(["run", "h_apo_pred_m", "t_apo_pred_s", "v_max_pred_mps"])
         for i in range(args.n):
-            writer.writerow([i, round(h_apo[i], 2), round(t_apo[i], 3)])
+            writer.writerow([i, round(h_apo[i], 2), round(t_apo[i], 3), round(v_max[i], 2)])
     print(f"\nZapisano: {csv_path}")
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.hist(h_apo, bins=30, color='tab:blue', alpha=0.7,
-            label=f"Monte Carlo predykcja (n={args.n}, rozrzut silnika)")
-    ax.axvline(np.mean(h_apo), color='tab:blue', ls='--', lw=1.5,
-               label=f"pred. mean={np.mean(h_apo):.0f} m")
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+    ax1.hist(h_apo, bins=30, color='tab:blue', alpha=0.7,
+             label=f"Monte Carlo predykcja (n={args.n}, rozrzut silnika)")
+    ax1.axvline(np.mean(h_apo), color='tab:blue', ls='--', lw=1.5,
+                label=f"pred. mean={np.mean(h_apo):.0f} m")
     for fno, h in actual.items():
-        ax.axvline(h, color='tab:red', lw=1.5, alpha=0.8)
+        ax1.axvline(h, color='tab:red', lw=1.5, alpha=0.8)
     if actual:
-        ax.axvline(list(actual.values())[0], color='tab:red', lw=1.5, alpha=0.8,
-                   label="apogea GPS rzeczywiste (loty)")
-    ax.set_xlabel("Apogeum [m]")
-    ax.set_ylabel("Liczba przebiegow")
-    ax.set_title(f"Monte Carlo apogeum vs rozrzut polowy — nos '{args.nose}'")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
+        ax1.axvline(list(actual.values())[0], color='tab:red', lw=1.5, alpha=0.8,
+                    label="apogea GPS rzeczywiste (loty)")
+    ax1.set_xlabel("Apogeum [m]")
+    ax1.set_ylabel("Liczba przebiegow")
+    ax1.set_title(f"Apogeum — nos '{args.nose}'")
+    ax1.legend(fontsize=8)
+    ax1.grid(alpha=0.3)
+
+    ax2.hist(v_max, bins=30, color='tab:green', alpha=0.7,
+             label=f"Monte Carlo predykcja (n={args.n}, rozrzut silnika)")
+    ax2.axvline(np.mean(v_max), color='tab:green', ls='--', lw=1.5,
+                label=f"pred. mean={np.mean(v_max):.0f} m/s")
+    for fno, v in actual_v.items():
+        ax2.axvline(v, color='tab:red', lw=1.5, alpha=0.8)
+    if actual_v:
+        ax2.axvline(list(actual_v.values())[0], color='tab:red', lw=1.5, alpha=0.8,
+                    label="V_max rzeczywiste (akcel.+GPS/baro, loty)")
+    ax2.set_xlabel("V_max [m/s]")
+    ax2.set_ylabel("Liczba przebiegow")
+    ax2.set_title(f"Predkosc maksymalna — nos '{args.nose}'")
+    ax2.legend(fontsize=8)
+    ax2.grid(alpha=0.3)
+
+    fig.suptitle(f"Monte Carlo apogeum i V_max vs rozrzut polowy — nos '{args.nose}'")
     plt.tight_layout()
     out_png = out_dir / f"monte_carlo_apogee_{args.nose}.png"
     plt.savefig(out_png, dpi=140, bbox_inches="tight")
