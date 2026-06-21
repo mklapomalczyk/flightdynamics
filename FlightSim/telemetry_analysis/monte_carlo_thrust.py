@@ -135,12 +135,19 @@ def actual_v_max(base, flights):
 
 # --------------------------------------------------------------------------
 def simulate_one(cfg, mach_ca, ca0, thrust_frac, thrust_mean, scale, t_burn,
-                  h0=100.0, t_max_pad=10.0):
+                  ratio_powered=None, post_burn_s=0.0, h0=100.0, t_max_pad=10.0):
     """Calkuje wznoszenie 2D do apogeum (Vz=0) dla jednej wylosowanej
     realizacji silnika. Ciag wzdluz elewacji startu (rakieta stabilizowana
-    spinem, krotki czas spalania), opor wzdluz wektora predkosci."""
+    spinem, krotki czas spalania), opor wzdluz wektora predkosci.
+
+    ratio_powered : tablica (na siatce mach_ca) lub None
+        Wzgledny spadek Cd przy "zasilanej" denku (plomien zaslania base
+        drag), z base_drag_phase_factor.py. Stosowany dla tt < t_burn +
+        post_burn_s (spalanie + okno resztkowego cisnienia w komorze po
+        wypaleniu); poza tym oknem uzywany czysty Cd z DATCOM."""
     elev = np.radians(cfg["elevation"])
     m_rocket, m_propellant, m_coast = cfg["m_rocket"], cfg["m_propellant"], cfg["m_coast"]
+    t_powered_end = t_burn + post_burn_s
 
     def thrust_at(tt):
         if tt > t_burn or tt < 0:
@@ -152,8 +159,12 @@ def simulate_one(cfg, mach_ca, ca0, thrust_frac, thrust_mean, scale, t_burn,
             return m_coast
         return m_rocket - m_propellant * (tt / t_burn)
 
-    def cd_at(ma):
-        return np.interp(ma, mach_ca, ca0, left=ca0[0], right=ca0[-1])
+    def cd_at(ma, tt):
+        cd0 = np.interp(ma, mach_ca, ca0, left=ca0[0], right=ca0[-1])
+        if ratio_powered is not None and tt < t_powered_end:
+            r = np.interp(ma, mach_ca, ratio_powered, left=ratio_powered[0], right=ratio_powered[-1])
+            return cd0 * r
+        return cd0
 
     def rhs(tt, state):
         h, Vh, Vz = state
@@ -161,7 +172,7 @@ def simulate_one(cfg, mach_ca, ca0, thrust_frac, thrust_mean, scale, t_burn,
         rho, a_snd, _, _ = isa(h)
         V_total = np.sqrt(Vh**2 + Vz**2)
         Ma = V_total / max(a_snd, 1.0)
-        Cd = cd_at(Ma)
+        Cd = cd_at(Ma, tt)
         q = 0.5 * rho * V_total**2
         D = Cd * q * S
 
@@ -203,18 +214,34 @@ def main():
     parser.add_argument("--case", default="rocket_70mm_baseline",
                         help="katalog DATCOM (datcom_runs/<case>/aero_table_missile.pkl)")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--base_drag_fix", action="store_true",
+                        help="zastosuj wzgledny spadek Cd (Fleeman, base_drag_phase_factor.py) "
+                             "podczas spalania + okna resztkowego po wypaleniu")
+    parser.add_argument("--post_burn_s", type=float, default=1.5,
+                        help="okno [s] po wypaleniu, w ktorym wciaz zaklada sie zaslonione "
+                             "denko (resztkowe cisnienie w komorze) — uzywane tylko z --base_drag_fix")
     args = parser.parse_args()
 
     base = get_data_dir()
     out_dir = Path(base) / "results"
     root = Path(base).parent
     pkl_path = root / "datcom_runs" / args.case / "aero_table_missile.pkl"
+    yaml_path = root / "configurations" / f"{args.case}.yaml"
     if not pkl_path.exists():
         raise FileNotFoundError(f"Brak {pkl_path}. Uruchom MAIN.py najpierw.")
 
     thrust_frac, thrust_mean, thrust_std = load_thrust_mean_std(out_dir / "thrust_mean_std.csv")
     burn = load_burn_time_stats(out_dir / "burn_time_stats.csv")
     mach_ca, ca0 = load_datcom_ca0(pkl_path)
+
+    ratio_powered = None
+    if args.base_drag_fix:
+        from base_drag_phase_factor import base_drag_ratio
+        ratio_powered = base_drag_ratio(yaml_path, mach_ca)
+        print(f"Korekta base drag (Fleeman, plomien zaslania denko): "
+              f"ratio_Cd w [{ratio_powered.min():.3f}, {ratio_powered.max():.3f}], "
+              f"okno po wypaleniu={args.post_burn_s:.2f}s")
+
     cfg, flights = nominal_config(base, args.nose)
     actual = actual_apogees(base, flights)
     actual_v = actual_v_max(base, flights)
@@ -240,7 +267,9 @@ def main():
         t_burn = float(np.clip(rng.normal(burn["mean_s"], burn["std_s"]),
                                 burn["min_s"], burn["max_s"]))
         t_apo[i], h_apo[i], v_max[i] = simulate_one(cfg, mach_ca, ca0, thrust_frac,
-                                                      thrust_mean, scale, t_burn)
+                                                      thrust_mean, scale, t_burn,
+                                                      ratio_powered=ratio_powered,
+                                                      post_burn_s=args.post_burn_s)
 
     print(f"\nMonte Carlo ({args.n} przebiegow), apogeum:")
     print(f"  predykcja: mean={np.mean(h_apo):.1f} m  std={np.std(h_apo):.1f} m  "
