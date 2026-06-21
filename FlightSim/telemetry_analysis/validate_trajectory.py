@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from telemetry_parser import parse_telemetry, get_data_dir
 from imu_reconstruction import detect_ignition
-from diag_drag import load_config, isa, detect_events, baro_altitude, S, G0
+from diag_drag import load_config, isa, detect_events, baro_altitude, calib_acc_scale, S, G0
 from estimate_thrust import load_cd_curves, cd_at
 from run_all_flights import check_data_exists
 
@@ -135,12 +135,30 @@ def simulate_ascent(tel, cfg, cal, curves, t_max_pad=10.0):
         t_apo_pred = float(sol.t_events[0][0])
         h_apo_pred = float(sol.y_events[0][0][0])
 
+    V_pred = np.sqrt(sol.y[1]**2 + sol.y[2]**2)
+
+    # Predkosc rzeczywista z calkowania akcelerometru wzdluz osi rakiety
+    # (specific force, bez grawitacji) — w przeciwienstwie do rozniczki
+    # baro/GPS, nie jest zaklocana czestymi skokami czujnika baro podczas
+    # wznoszenia (wibracje/przeciazenie). Ten sam typ rekonstrukcji jest
+    # juz uzywany jako fallback w estimate_thrust.py.
+    acc_scale, _ = calib_acc_scale(tel, t_ign_abs)
+    seg = slice(i_ign, i_apo + 1)
+    t_actual = t_rel_full[seg]
+    a_meas = tel.acc_x[seg] * acc_scale * G0
+    a_kin = a_meas - G0 * np.sin(elev)
+    V_actual = np.concatenate([[0.0],
+        np.cumsum(0.5 * (a_kin[1:] + a_kin[:-1]) * np.diff(t_actual))])
+    V_actual = np.abs(V_actual)
+
     return dict(
-        t_rel=sol.t, h=sol.y[0], Vh=sol.y[1], Vz=sol.y[2],
+        t_rel=sol.t, h=sol.y[0], Vh=sol.y[1], Vz=sol.y[2], V=V_pred,
         t_apo_pred=t_apo_pred, h_apo_pred=h_apo_pred,
         t_apo_actual=float(t[i_apo] - t[i_ign]),
         h_apo_actual=float(h_baro[i_apo]),
         h0=h0,
+        t_actual=t_actual, V_actual=V_actual,
+        V_max_pred=float(np.max(V_pred)), V_max_actual=float(np.nanmax(V_actual)),
     )
 
 
@@ -154,23 +172,30 @@ def process_flight(fno, cfg, cal, curves, base):
     dt = res["t_apo_pred"] - res["t_apo_actual"]
     pct = 100.0 * dh / res["h_apo_actual"]
 
+    dV = res["V_max_pred"] - res["V_max_actual"]
+    dV_pct = 100.0 * dV / res["V_max_actual"]
+
     print(f"[LOT {fno}] apogeum: pred={res['h_apo_pred']:.1f}m  "
           f"actual={res['h_apo_actual']:.1f}m  dh={dh:+.1f}m ({pct:+.1f}%)  "
           f"t_pred={res['t_apo_pred']:.2f}s  t_actual={res['t_apo_actual']:.2f}s  "
-          f"dt={dt:+.2f}s")
+          f"dt={dt:+.2f}s  |  V_max: pred={res['V_max_pred']:.1f}m/s  "
+          f"actual={res['V_max_actual']:.1f}m/s  dV={dV:+.1f}m/s ({dV_pct:+.1f}%)")
 
     return dict(flight_no=fno, nose=cal["nose"],
                 h_apo_pred=res["h_apo_pred"], h_apo_actual=res["h_apo_actual"],
                 dh_m=dh, dh_pct=pct,
                 t_apo_pred=res["t_apo_pred"], t_apo_actual=res["t_apo_actual"],
-                dt_s=dt, traj=res)
+                dt_s=dt,
+                V_max_pred=res["V_max_pred"], V_max_actual=res["V_max_actual"],
+                dV_mps=dV, dV_pct=dV_pct, traj=res)
 
 
 # --------------------------------------------------------------------------
 def save_csv(results, out_dir):
     csv_path = Path(out_dir) / "trajectory_closure_summary.csv"
     fieldnames = ["flight_no", "nose", "h_apo_pred_m", "h_apo_actual_m",
-                  "dh_m", "dh_pct", "t_apo_pred_s", "t_apo_actual_s", "dt_s"]
+                  "dh_m", "dh_pct", "t_apo_pred_s", "t_apo_actual_s", "dt_s",
+                  "V_max_pred_mps", "V_max_actual_mps", "dV_mps", "dV_pct"]
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -183,17 +208,21 @@ def save_csv(results, out_dir):
                 t_apo_pred_s=round(r["t_apo_pred"], 3),
                 t_apo_actual_s=round(r["t_apo_actual"], 3),
                 dt_s=round(r["dt_s"], 3),
+                V_max_pred_mps=round(r["V_max_pred"], 2),
+                V_max_actual_mps=round(r["V_max_actual"], 2),
+                dV_mps=round(r["dV_mps"], 2), dV_pct=round(r["dV_pct"], 2),
             ))
     print(f"Zapisano: {csv_path}")
     return csv_path
 
 
 def plot_results(results, out_dir):
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5.5))
 
     ax0 = axes[0]
-    for r in results:
-        ax0.plot(r["traj"]["t_rel"], r["traj"]["h"], lw=1.3,
+    colors = plt.cm.tab10(np.linspace(0, 1, len(results)))
+    for r, col in zip(results, colors):
+        ax0.plot(r["traj"]["t_rel"], r["traj"]["h"], lw=1.3, color=col,
                   label=f"lot {r['flight_no']} (model)")
         ax0.scatter([r["t_apo_actual"]], [r["h_apo_actual"]], marker='x', s=60,
                      c='k')
@@ -202,15 +231,26 @@ def plot_results(results, out_dir):
     ax0.legend(fontsize=7); ax0.grid(alpha=0.3)
 
     ax1 = axes[1]
+    for r, col in zip(results, colors):
+        ax1.plot(r["traj"]["t_rel"], r["traj"]["V"], lw=1.3, color=col,
+                  label=f"lot {r['flight_no']} (model)")
+        ax1.plot(r["traj"]["t_actual"], r["traj"]["V_actual"], lw=1.0,
+                  ls='--', color=col, alpha=0.7,
+                  label=f"lot {r['flight_no']} (akcelerometr)")
+    ax1.set_xlabel("Czas od zaplonu [s]"); ax1.set_ylabel("V [m/s]")
+    ax1.set_title("Predkosc calkowita: model vs faktyczna (przerywana, z akcelerometru)")
+    ax1.legend(fontsize=6); ax1.grid(alpha=0.3)
+
+    ax2 = axes[2]
     fnos = [r["flight_no"] for r in results]
     dh_pct = [r["dh_pct"] for r in results]
-    ax1.bar(range(len(fnos)), dh_pct, color='tab:blue', alpha=0.7)
-    ax1.set_xticks(range(len(fnos)))
-    ax1.set_xticklabels([str(f) for f in fnos])
-    ax1.axhline(0, color='k', lw=0.8)
-    ax1.set_xlabel("Lot"); ax1.set_ylabel("Blad wysokosci apogeum [%]")
-    ax1.set_title("Blad zamkniecia trajektorii (model vs GPS)")
-    ax1.grid(alpha=0.3)
+    ax2.bar(range(len(fnos)), dh_pct, color='tab:blue', alpha=0.7)
+    ax2.set_xticks(range(len(fnos)))
+    ax2.set_xticklabels([str(f) for f in fnos])
+    ax2.axhline(0, color='k', lw=0.8)
+    ax2.set_xlabel("Lot"); ax2.set_ylabel("Blad wysokosci apogeum [%]")
+    ax2.set_title("Blad zamkniecia trajektorii (model vs GPS)")
+    ax2.grid(alpha=0.3)
 
     plt.tight_layout()
     out_png = Path(out_dir) / "trajectory_closure.png"
@@ -264,8 +304,11 @@ def main():
         return
 
     dh_pcts = np.array([r["dh_pct"] for r in results])
+    dV_pcts = np.array([r["dV_pct"] for r in results])
     print(f"\nBlad wysokosci apogeum: mean={np.mean(dh_pcts):+.2f}%  "
           f"std={np.std(dh_pcts):.2f}%  |max|={np.max(np.abs(dh_pcts)):.2f}%")
+    print(f"Blad predkosci maksymalnej: mean={np.mean(dV_pcts):+.2f}%  "
+          f"std={np.std(dV_pcts):.2f}%  |max|={np.max(np.abs(dV_pcts)):.2f}%")
 
     save_csv(results, out_dir)
     plot_results(results, out_dir)
