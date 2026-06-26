@@ -161,6 +161,12 @@ def process_flight(fno, cfg, nose, curves, base):
           f"(n={n_calib})  k={k:.3f}N/bar  c={c:.2f}N  R2={r2:.3f}  "
           f"T_max={T_est.max():.1f}N")
 
+    R2_MIN = 0.5
+    if not np.isfinite(r2) or r2 < R2_MIN:
+        print(f"[LOT {fno}] R2={r2:.3f} < {R2_MIN} — kalibracja Pc->T niewiarygodna "
+              f"(np. uszkodzony kanal cisnienia w komorze), pomijam")
+        return None
+
     return dict(
         flight_no=fno, nose=nose, t=tt, Pc=Pc, T_est=T_est, m=m_t,
         t_burn=t_burn, k=k, c=c, r2=r2, n_calib=n_calib,
