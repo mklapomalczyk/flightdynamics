@@ -222,22 +222,117 @@ class WGS84Atmosphere:
 
 
 # ============================================================================
+# ISA zakotwiczona w zmierzonych warunkach naziemnych (dzień startu)
+# ============================================================================
+
+def _saturation_vapor_pressure_hpa(T_C: float) -> float:
+    """Wzór Magnusa — ciśnienie pary wodnej nasyconej [hPa] dla temp. w [°C]."""
+    return 6.1094 * np.exp(17.625 * T_C / (243.04 + T_C))
+
+
+class ISALaunchSiteAtmosphere:
+    """
+    ISA zakotwiczona w zmierzonych warunkach naziemnych (T, p, wilgotność
+    względna) w momencie startu, zamiast standardowych warunków MSL
+    (288.15 K, 101325 Pa). h=0 odpowiada poziomowi startu (tak jak w
+    pozostałych modelach atmosfery w tym pliku — z=0 to wyrzutnia, nie
+    rzeczywista wysokość AMSL).
+
+    Założenia uproszczające (efekt rzędu <1% gęstości, drugorzędny wobec
+    przesunięcia T/p, ale liczony jawnie skoro mamy zmierzoną wilgotność):
+      - profil temperatury = standardowy profil ISA (te same warstwy/lapse
+        rate) przesunięty o stałą ΔT = T0_zmierzone - T0_ISA,
+      - ciśnienie liczone barometrycznie od p0_zmierzonego przy h=0 z tym
+        przesuniętym profilem T,
+      - stosunek zmieszania pary wodnej (specific humidity) zakładany
+        stały z wysokością (dobrze wymieszana warstwa przyziemna) —
+        korekta gęstości przez temperaturę wirtualną Tv.
+    """
+
+    def __init__(self, T0_C: float, p0_hpa: float, RH_pct: float = 0.0):
+        self.T0 = float(T0_C) + 273.15      # [K]
+        self.p0 = float(p0_hpa) * 100.0      # [Pa]
+        self.RH = float(RH_pct)
+        self._delta_T = self.T0 - T0         # przesunięcie wzgl. standardowej ISA (288.15 K)
+
+        e0_hpa = _saturation_vapor_pressure_hpa(float(T0_C)) * (self.RH / 100.0)
+        # mieszanina wodorowo-powietrzna: stosunek zmieszania r = 0.622*e/(p-e), zakładany const z h
+        self._mixing_ratio = 0.622 * e0_hpa / max(p0_hpa - e0_hpa, 1e-6)
+
+        self._cache_h = None
+        self._cache_result = None
+
+    def _layer_base_T(self, h0: float) -> float:
+        base = next(l for l in _ISA_LAYERS if l[0] == h0)
+        return base[1] + self._delta_T
+
+    def _pressure_at_base(self, h_base: float) -> float:
+        p = self.p0
+        for i in range(len(_ISA_LAYERS) - 1):
+            h0, T_base_std, L = _ISA_LAYERS[i]
+            h1 = _ISA_LAYERS[i + 1][0]
+            if h_base <= h0:
+                break
+            T_base = T_base_std + self._delta_T
+            dh = min(h_base, h1) - h0
+            if abs(L) < 1e-10:
+                p *= np.exp(-G0 * dh / (R_AIR * T_base))
+            else:
+                p *= (T_base / (T_base + L * dh)) ** (G0 / (R_AIR * L))
+        return p
+
+    def at(self, h: float) -> AtmosphereState:
+        h = max(0.0, float(h))
+        if self._cache_h is not None and abs(h - self._cache_h) < 0.1:
+            return self._cache_result
+
+        h0, T_base_std, L = _isa_layer(h)
+        T_base = T_base_std + self._delta_T
+        p_base = self._pressure_at_base(h0)
+        dh = h - h0
+
+        T = T_base + L * dh
+        if abs(L) < 1e-10:
+            P = p_base * np.exp(-G0 * dh / (R_AIR * T_base))
+        else:
+            P = p_base * (T_base / T) ** (G0 / (R_AIR * L))
+
+        # gęstość z korekcją wilgotności (temperatura wirtualna, r = const z h)
+        Tv = T * (1.0 + 0.61 * self._mixing_ratio)
+        rho = P / (R_AIR * Tv)
+
+        a = np.sqrt(GAMMA * R_AIR * T)
+        mu = ISAAtmosphere._sutherland(T)
+
+        result = AtmosphereState(
+            h=h, temperature=T, pressure=P, density=rho,
+            speed_of_sound=a, dynamic_viscosity=mu,
+        )
+        self._cache_h, self._cache_result = h, result
+        return result
+
+
+# ============================================================================
 # Fabryka — wybór modelu przez parametr
 # ============================================================================
 
-def create_atmosphere(model: str = "ISA") -> AtmosphereModel:
+def create_atmosphere(model: str = "ISA", **kwargs) -> AtmosphereModel:
     """
     Fabryka modelu atmosfery.
 
     Parameters
     ----------
     model : str
-        "ISA"   → standardowa atmosfera ISA (domyślna)
-        "WGS84" → ISA z korekcją WGS84 wysokości
+        "ISA"        → standardowa atmosfera ISA (domyślna)
+        "WGS84"      → ISA z korekcją WGS84 wysokości
+        "ISA_LAUNCH" → ISA zakotwiczona w zmierzonych warunkach naziemnych;
+                       wymaga kwargs: T0_C, p0_hpa, opcjonalnie RH_pct
     """
     if model == "ISA":
         return ISAAtmosphere()
     elif model == "WGS84":
         return WGS84Atmosphere()
+    elif model == "ISA_LAUNCH":
+        return ISALaunchSiteAtmosphere(**kwargs)
     else:
-        raise ValueError(f"Nieznany model atmosfery: '{model}'. Wybierz 'ISA' lub 'WGS84'.")
+        raise ValueError(f"Nieznany model atmosfery: '{model}'. Wybierz 'ISA', 'WGS84' lub 'ISA_LAUNCH'.")
