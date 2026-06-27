@@ -33,7 +33,7 @@ YAML).
 
 Uzycie (lokalnie, z prawdziwym DATCOM):
     python analyze_per_flight_6dof.py
-    python analyze_per_flight_6dof.py --case rocket_70mm_baseline
+    python analyze_per_flight_6dof.py --case-ostra rocket_70mm_baseline --case-tepa rocket_70mm_baseline_tepa
 
 Sanity-check w kontenerze (bez DATCOM, tylko logika kodu):
     python analyze_per_flight_6dof.py --no-rerun-datcom
@@ -153,7 +153,10 @@ def run_one(aero, geom, atm, gravity, launcher, mass, prop, initial_state):
 def main():
     parser = argparse.ArgumentParser(
         description="Per-lot 6DOF (masa+elewacja/azymut+atmosfera skorygowane) vs dane polowe")
-    parser.add_argument("--case", default="rocket_70mm_baseline")
+    parser.add_argument("--case-ostra", default="rocket_70mm_baseline",
+                         help="case YAML dla lotow z nosem ostrym")
+    parser.add_argument("--case-tepa", default="rocket_70mm_baseline_tepa",
+                         help="case YAML dla lotow z nosem tepym")
     parser.add_argument("--no-rerun-datcom", action="store_true",
                          help="uzyj wylacznie istniejacego cache bazowego YAML (bez DATCOM); "
                               "fizycznie poprawne tylko dla lotow, ktorych cant_angle == YAML")
@@ -162,16 +165,24 @@ def main():
     base = get_data_dir()
     root = Path(base).parent
 
-    cfg_base = load_config(str(root / "configurations" / f"{args.case}.yaml"))
-    cant_yaml = sorted(set(round(fin.cant_angle, 5) for fin in cfg_base.fins))
-    t_ignition = cfg_base.propulsion.t_ignition
+    case_by_nose = {"ostra": args.case_ostra, "tepa": args.case_tepa}
+    cfg_base_by_nose = {
+        nose: load_config(str(root / "configurations" / f"{case}.yaml"))
+        for nose, case in case_by_nose.items()
+    }
+    cant_yaml_by_nose = {
+        nose: sorted(set(round(fin.cant_angle, 5) for fin in cfg.fins))
+        for nose, cfg in cfg_base_by_nose.items()
+    }
+    t_ignition_by_nose = {nose: cfg.propulsion.t_ignition for nose, cfg in cfg_base_by_nose.items()}
 
     gravity = create_gravity("constant")
     launcher = LauncherConfig(L_rail=3.0)
 
     flights = read_flights(base)
     print(f"Loty do analizy: {[r['fno'] for r in flights]}")
-    print(f"cant_angle w YAML: {cant_yaml}  (loty o innym cant_angle wymagaja DATCOM)\n")
+    print(f"case per nos: {case_by_nose}")
+    print(f"cant_angle w YAML: {cant_yaml_by_nose}  (loty o innym cant_angle wymagaja DATCOM)\n")
 
     print(f"{'lot':>4} {'nos':>6} {'cant':>5} {'m_kg':>6} {'el':>5} {'az':>5} "
           f"{'T[C]':>6} {'h_pred':>8} {'h_act':>8} {'dh[%]':>7} "
@@ -179,8 +190,12 @@ def main():
 
     out_rows = []
     for r in flights:
-        aero, _ = get_aero_for_cant(args.case, r["cant"], force_rerun=not args.no_rerun_datcom)
-        geom = build_geometry(load_config(str(root / "configurations" / f"{args.case}.yaml")))
+        case = case_by_nose[r["nose"]]
+        cfg_base = cfg_base_by_nose[r["nose"]]
+        t_ignition = t_ignition_by_nose[r["nose"]]
+
+        aero, _ = get_aero_for_cant(case, r["cant"], force_rerun=not args.no_rerun_datcom)
+        geom = build_geometry(load_config(str(root / "configurations" / f"{case}.yaml")))
         import math
         geom.cant_angle_rad = math.radians(r["cant"])
 
@@ -216,7 +231,7 @@ def main():
 
     out_dir = Path(base) / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = out_dir / f"per_flight_6dof_{args.case}.csv"
+    csv_path = out_dir / "per_flight_6dof_per_nose.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(out_rows[0].keys()))
         writer.writeheader()
@@ -239,13 +254,14 @@ def main():
     ax.axhline(0.0, color="k", lw=0.8)
     ax.set_xlabel("Lot")
     ax.set_ylabel("Δ apogeum (pred vs actual) [%]")
-    ax.set_title(f"Per-lot bias apogeum (masa+elewacja/azymut+atmosfera skorygowane) — {args.case}")
+    ax.set_title("Per-lot bias apogeum (masa+elewacja/azymut+atmosfera skorygowane, "
+                 "baseline per ksztalt nosa)")
     ax.grid(alpha=0.3)
     from matplotlib.patches import Patch
-    ax.legend(handles=[Patch(color="tab:blue", label="ostra"),
-                        Patch(color="tab:orange", label="tepa")], fontsize=9)
+    ax.legend(handles=[Patch(color="tab:blue", label=f"ostra ({args.case_ostra})"),
+                        Patch(color="tab:orange", label=f"tepa ({args.case_tepa})")], fontsize=9)
     plt.tight_layout()
-    out_png = out_dir / f"per_flight_6dof_{args.case}.png"
+    out_png = out_dir / "per_flight_6dof_per_nose.png"
     plt.savefig(out_png, dpi=140, bbox_inches="tight")
     plt.close()
     print(f"Zapisano: {out_png}")
