@@ -34,6 +34,7 @@ from models.mass6 import MassModel6DOF
 from models.aerodynamics import AeroModel
 from models.gravity import GravityModel
 from models.launcher import LauncherConfig, RailLauncher
+from models.wind import WindModel
 
 # Rozmiar wektora stanu z rail_dist
 STATE_SIZE_6DOF_RAIL = 14
@@ -82,6 +83,7 @@ class ForceModel6DOF:
         launcher:    Optional[LauncherConfig] = None,
         logger:      Optional[object]         = None,
         cfg:         Optional[object]         = None,
+        wind_model:  Optional[WindModel]      = None,
     ):
         self.atmosphere = atmosphere
         self.mass_model = mass_model
@@ -93,6 +95,7 @@ class ForceModel6DOF:
             launcher if launcher is not None else LauncherConfig(L_rail=0.0)
         )
         self.logger     = logger
+        self.wind_model = wind_model
         # Dual-spin — opcjonalnie z cfg
         self._dual_spin = None
         if cfg is not None and getattr(cfg, 'dual_spin', None) is not None:
@@ -144,9 +147,23 @@ class ForceModel6DOF:
             v, w  = state.v, state.w
             p, qr, r = state.p, state.qr, state.r
 
+        # ---- Wiatr -> predkosc wzgledem powietrza (tylko do aero) ------- #
+        # Wiatr aktywny TYLKO poza szyna (jak v,w,p,qr,r). u_air/v_air/w_air
+        # uzywane WYLACZNIE do katow aero/mach/q_dyn — dynamika (du_dt itd.)
+        # i kinematyka pozycji (vel_launch) zawsze uzywaja u,v,w wzgledem ziemi.
+        DCM = quat_to_dcm(q)
+        if not on_rail and self.wind_model is not None:
+            wind_lf   = self.wind_model.velocity_launch_frame(t, -state.z)
+            wind_body = DCM @ wind_lf
+            u_air = u - wind_body[0]
+            v_air = v - wind_body[1]
+            w_air = w - wind_body[2]
+        else:
+            u_air, v_air, w_air = u, v, w
+
         # ---- Kąty aerodynamiczne ---------------------------------------- #
-        alpha, beta = aero_angles(u, v, w)
-        speed = float(np.sqrt(u**2 + v**2 + w**2))
+        alpha, beta = aero_angles(u_air, v_air, w_air)
+        speed = float(np.sqrt(u_air**2 + v_air**2 + w_air**2))
         mach  = atm.mach(speed)
         q_dyn = 0.5 * atm.density * speed**2
 
@@ -235,7 +252,6 @@ class ForceModel6DOF:
         M_thrust_yaw   = thrust * self.prop.offset_y
 
         # ---- Grawitacja w body frame ------------------------------------ #
-        DCM      = quat_to_dcm(q)
         g_launch = np.array([0.0, 0.0, +g])
         g_body   = DCM @ g_launch
         gx_body, gy_body, gz_body = g_body
