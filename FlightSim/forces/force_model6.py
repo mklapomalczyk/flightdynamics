@@ -167,17 +167,26 @@ class ForceModel6DOF:
         mach  = atm.mach(speed)
         q_dyn = 0.5 * atm.density * speed**2
 
+        # Calkowity kat natarcia (alpha+beta) — kat miedzy osia X_body a
+        # wektorem predkosci, niezalezny od plaszczyzny. Uzyty tylko do CA
+        # (opor bryly osiowosymetrycznej), patrz models/aerodynamics.py.
+        if speed > 1e-6:
+            alpha_total = float(np.arccos(np.clip(u_air / speed, -1.0, 1.0)))
+        else:
+            alpha_total = 0.0
+
         # ---- Siły aerodynamiczne ---------------------------------------- #
         aero = self.aero.compute(
-            alpha  = alpha,
-            mach   = mach,
-            q_dyn  = q_dyn,
-            q_rate = qr,
-            speed  = speed,
-            xcg    = xcg,
-            xcp    = self.geom.xcp,
-            S_ref  = self.geom.S_ref,
-            d_ref  = self.geom.d_ref,
+            alpha       = alpha,
+            mach        = mach,
+            q_dyn       = q_dyn,
+            q_rate      = qr,
+            speed       = speed,
+            xcg         = xcg,
+            xcp         = self.geom.xcp,
+            S_ref       = self.geom.S_ref,
+            d_ref       = self.geom.d_ref,
+            alpha_total = alpha_total,
         )
 
         FA_x = aero.FA_x

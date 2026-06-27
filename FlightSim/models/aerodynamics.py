@@ -27,6 +27,22 @@ gdzie:
   q_dyn = 0.5 * rho * V²   — ciśnienie dynamiczne [Pa]
   S_ref                     — pole powierzchni referencyjnej [m²] (przekrój poprzeczny)
   d_ref                     — średnica referencyjna [m]
+
+Calkowity kat natarcia (alpha_total):
+  Dla bryly osiowosymetrycznej opor wzdluz osi (FA_x, body X) zalezy od
+  KATA MIEDZY osia a wektorem predkosci w 3D — nie tylko od jego
+  skladowej w plaszczyznie pitch. Czyste slizganie (beta!=0, alpha=0)
+  MUSI wiec generowac opor tak samo jak rownowazny alpha w plaszczyznie
+  pitch. compute() przyjmuje opcjonalny `alpha_total` (domyslnie None ->
+  uzyte zostaje `alpha`, zachowanie jak dawniej); gdy podane, CA i CN
+  uzyte do FA_x (oporu osiowego) sa interpolowane przy `alpha_total`
+  (zarowno w members cos/sin jak i w lookupie tabeli) — FA_z/Cm/moment
+  pochylajacy ZOSTAJA przy plaszczyznie pitch (`alpha`), zgodnie z
+  istniejaca/zwalidowana dynamika pitch. Sila boczna od slizgania
+  (CYB*beta, w force_model6.py) jest osobnym, liniowym mechanizmem i nie
+  jest tu dotykana.
+  Wolajacy (forces/force_model6.py) liczy:
+      alpha_total = arccos(clip(u_air/speed, -1, 1))
 """
 
 import numpy as np
@@ -71,15 +87,17 @@ class AeroModel(Protocol):
 
     def compute(
         self,
-        alpha:  float,      # kąt natarcia [rad]
-        mach:   float,      # liczba Macha [-]
-        q_dyn:  float,      # ciśnienie dynamiczne [Pa]
-        q_rate: float,      # prędkość kątowa pitch [rad/s] (do Cmq)
-        speed:  float,      # prędkość [m/s] (do normalizacji Cmq)
-        xcg:    float,      # pozycja xcg od nosa [m]
-        xcp:    float,      # pozycja centrum parcia od nosa [m]
-        S_ref:  float,      # pole referencyjne [m²]
-        d_ref:  float,      # średnica referencyjna [m]
+        alpha:       float,      # kąt natarcia [rad]
+        mach:        float,      # liczba Macha [-]
+        q_dyn:       float,      # ciśnienie dynamiczne [Pa]
+        q_rate:      float,      # prędkość kątowa pitch [rad/s] (do Cmq)
+        speed:       float,      # prędkość [m/s] (do normalizacji Cmq)
+        xcg:         float,      # pozycja xcg od nosa [m]
+        xcp:         float,      # pozycja centrum parcia od nosa [m]
+        S_ref:       float,      # pole referencyjne [m²]
+        d_ref:       float,      # średnica referencyjna [m]
+        alpha_total: Optional[float] = None,  # calkowity kat natarcia [rad]
+                                               # (alpha+beta, do CA — patrz docstring modulu)
     ) -> AeroForces: ...
 
 
@@ -130,18 +148,21 @@ class ConstantAero:
 
     def compute(
         self,
-        alpha:  float,
-        mach:   float,
-        q_dyn:  float,
-        q_rate: float,
-        speed:  float,
-        xcg:    float,
-        xcp:    float,
-        S_ref:  float,
-        d_ref:  float,
+        alpha:       float,
+        mach:        float,
+        q_dyn:       float,
+        q_rate:      float,
+        speed:       float,
+        xcg:         float,
+        xcp:         float,
+        S_ref:       float,
+        d_ref:       float,
+        alpha_total: Optional[float] = None,
     ) -> AeroForces:
 
         # Współczynniki
+        # CA stale (brak tabeli) -> alpha_total nie ma tu wplywu, ale
+        # parametr przyjety dla zgodnosci z TableAero.
         CA = self.CA
         CN = self.CN_alpha * alpha
 
@@ -177,8 +198,13 @@ class ConstantAero:
         #   FA_x ≈ -CA*cos(alpha) - CN*sin(alpha) ≈ -CA - CN*alpha
         #   FA_z ≈  CN*cos(alpha) - CA*sin(alpha) ≈  CN - CA*alpha
         # Dla dokładności używamy pełnych wyrażeń:
+        # FA_x (opor osiowy) uzywa calkowitego kata natarcia — patrz
+        # docstring modulu. FA_z zostaje w plaszczyznie pitch (alpha).
+        alpha_total_eff = alpha if alpha_total is None else alpha_total
         ca, sa = np.cos(alpha), np.sin(alpha)
-        FA_x = q_dyn * S_ref * (-CA * ca - CN * sa)
+        ca_t, sa_t = np.cos(alpha_total_eff), np.sin(alpha_total_eff)
+        CN_x = self.CN_alpha * alpha_total_eff
+        FA_x = q_dyn * S_ref * (-CA * ca_t - CN_x * sa_t)
         FA_z = q_dyn * S_ref * ( CN * ca - CA * sa)
 
         MA_yy = q_dyn * S_ref * d_ref * Cm_total
@@ -279,15 +305,16 @@ class TableAero:
 
     def compute(
         self,
-        alpha:  float,
-        mach:   float,
-        q_dyn:  float,
-        q_rate: float,
-        speed:  float,
-        xcg:    float,
-        xcp:    float,
-        S_ref:  float,
-        d_ref:  float,
+        alpha:       float,
+        mach:        float,
+        q_dyn:       float,
+        q_rate:      float,
+        speed:       float,
+        xcg:         float,
+        xcp:         float,
+        S_ref:       float,
+        d_ref:       float,
+        alpha_total: Optional[float] = None,
     ) -> AeroForces:
 
         # Ogranicz alpha do zakresu tabeli — poza nim DATCOM nie ma sensu
@@ -298,6 +325,15 @@ class TableAero:
 
         CA = self._interp(self.CA_table, alpha_clip, mach)
         CN = self._interp(self.CN_table, alpha_clip, mach)
+
+        # Opor osiowy (FA_x) dla bryly osiowosymetrycznej zalezy od calkowitego
+        # kata natarcia (alpha+beta), nie tylko od plaszczyzny pitch — patrz
+        # docstring modulu. FA_z/Cm zostaja przy CA/CN w plaszczyznie pitch
+        # (powyzej) — zwalidowana dynamika pitch sie nie zmienia.
+        alpha_total_clip = (alpha_clip if alpha_total is None
+                             else float(np.clip(alpha_total, alpha_min, alpha_max)))
+        CA_x = self._interp(self.CA_table, alpha_total_clip, mach)
+        CN_x = self._interp(self.CN_table, alpha_total_clip, mach)
 
         if self.Cm_table is not None:
             Cm_datcom = self._interp(self.Cm_table, alpha_clip, mach)
@@ -335,7 +371,8 @@ class TableAero:
         Cm_total = Cm + Cm_damping
 
         ca, sa = np.cos(alpha), np.sin(alpha)
-        FA_x = q_dyn * S_ref * (-CA * ca - CN * sa)
+        ca_t, sa_t = np.cos(alpha_total_clip), np.sin(alpha_total_clip)
+        FA_x = q_dyn * S_ref * (-CA_x * ca_t - CN_x * sa_t)
         FA_z = q_dyn * S_ref * ( CN * ca - CA * sa)
         MA_yy = q_dyn * S_ref * d_ref * Cm_total
 
