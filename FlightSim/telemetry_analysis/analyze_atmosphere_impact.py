@@ -134,7 +134,7 @@ def main():
               f"uzyte zostanie cache DATCOM JAK JEST (bez przeliczania); "
               f"wynik bedzie scisly tylko jesli te wartosci sie zgadzaja.")
 
-    aero = get_aero_model(args.case, method="missile_datcom", force_rerun=False)
+    aero = get_aero_model(args.case, method="missile_datcom", force_rerun=True)
     mass = build_mass_model(cfg)
     prop = build_propulsion(cfg)
     geom = build_geometry(cfg)

@@ -98,7 +98,7 @@ def main():
     root = Path(base).parent
 
     cfg = load_config(str(root / "configurations" / f"{args.case}.yaml"))
-    aero = get_aero_model(args.case, method="missile_datcom", force_rerun=False)
+    aero = get_aero_model(args.case, method="missile_datcom", force_rerun=True)
     mass = build_mass_model(cfg)
     prop = build_propulsion(cfg)
     geom = build_geometry(cfg)
