@@ -54,7 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from telemetry_parser import get_data_dir
 from run_6dof_cant_montecarlo import get_aero_for_cant
 from datcom_io.config_reader import load_config
-from datcom_io.rocket_builder import build_propulsion, build_geometry
+from datcom_io.rocket_builder import build_propulsion, build_geometry, ThrustProfile, PropulsionConfig6DOFDynamic
 from models.mass6 import MassModel6DOF, LinearIxx
 from models.atmosphere import create_atmosphere
 from models.gravity import create_gravity
@@ -100,6 +100,23 @@ def read_flights(base):
         ))
     rows.sort(key=lambda r: r["fno"])
     return rows
+
+
+def build_flight_thrust(base, fno, t_ignition):
+    """Buduje PropulsionConfig6DOFDynamic z thrust_flight_<fno>.csv (kolumny
+    t_s, T_est_N) — rzeczywisty profil ciagu TEGO lotu z kalibracji Pc->T
+    (estimate_thrust.py), zamiast usrednionego profilu z YAML. Zwraca None
+    jesli plik nie istnieje (np. lot 21, wykluczony przez brama R2)."""
+    csv_path = Path(base) / "results" / f"thrust_flight_{fno}.csv"
+    if not csv_path.exists():
+        return None
+    t_list, F_list = [], []
+    with open(csv_path, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            t_list.append(float(row["t_s"]))
+            F_list.append(max(float(row["T_est_N"]), 0.0))
+    profile = ThrustProfile(list(zip(t_list, F_list)))
+    return PropulsionConfig6DOFDynamic(thrust_profile=profile, t_ignition=t_ignition)
 
 
 def actual_apogee_vmax(base, fno):
@@ -184,9 +201,9 @@ def main():
     print(f"case per nos: {case_by_nose}")
     print(f"cant_angle w YAML: {cant_yaml_by_nose}  (loty o innym cant_angle wymagaja DATCOM)\n")
 
-    print(f"{'lot':>4} {'nos':>6} {'cant':>5} {'m_kg':>6} {'el':>5} {'az':>5} "
-          f"{'T[C]':>6} {'h_pred':>8} {'h_act':>8} {'dh[%]':>7} "
-          f"{'V_pred':>7} {'V_act':>7} {'dV[%]':>7}")
+    print(f"{'lot':>4} {'nos':>6} {'cant':>5} {'m_kg':>6} {'el':>5} {'az':>5} {'T[C]':>6} "
+          f"{'h_base':>8} {'h_adj':>8} {'h_act':>8} {'dh_base[%]':>11} {'dh_adj[%]':>10} "
+          f"{'V_base':>7} {'V_adj':>7} {'V_act':>7} {'dV_base[%]':>11} {'dV_adj[%]':>10}")
 
     out_rows = []
     for r in flights:
@@ -199,34 +216,49 @@ def main():
         import math
         geom.cant_angle_rad = math.radians(r["cant"])
 
-        prop = build_propulsion(cfg_base)
         mass = build_scaled_mass(cfg_base, t_ignition, r["m_rocket"])
-
         atm = create_atmosphere("ISA_LAUNCH", T0_C=r["T_C"], p0_hpa=r["p_hpa"], RH_pct=r["RH_pct"])
-
         initial_state = State6DOF.initial(elevation_deg=r["elevation"], azimuth_deg=r["azimuth"])
 
+        # Baseline: usredniony profil ciagu z YAML (ten sam dla wszystkich lotow)
+        prop_base = build_propulsion(cfg_base)
         try:
-            h_pred, v_pred, status = run_one(aero, geom, atm, gravity, launcher, mass, prop, initial_state)
+            h_base, v_base, status_base = run_one(aero, geom, atm, gravity, launcher, mass, prop_base, initial_state)
         except Exception as e:
-            h_pred, v_pred, status = float("nan"), float("nan"), f"error:{e}"
+            h_base, v_base, status_base = float("nan"), float("nan"), f"error:{e}"
+
+        # Adjusted: rzeczywisty profil ciagu TEGO lotu z kalibracji Pc->T
+        prop_flight = build_flight_thrust(base, r["fno"], t_ignition)
+        if prop_flight is not None:
+            try:
+                h_adj, v_adj, status_adj = run_one(aero, geom, atm, gravity, launcher, mass, prop_flight, initial_state)
+            except Exception as e:
+                h_adj, v_adj, status_adj = float("nan"), float("nan"), f"error:{e}"
+        else:
+            h_adj, v_adj, status_adj = float("nan"), float("nan"), "no_thrust_calib"
 
         h_act, v_act = actual_apogee_vmax(base, r["fno"])
-        dh_pct = 100.0 * (h_pred - h_act) / h_act if h_act else float("nan")
-        dv_pct = 100.0 * (v_pred - v_act) / v_act if (v_act is not None) else float("nan")
+        dh_base = 100.0 * (h_base - h_act) / h_act if h_act else float("nan")
+        dh_adj = 100.0 * (h_adj - h_act) / h_act if (h_act and not np.isnan(h_adj)) else float("nan")
+        dv_base = 100.0 * (v_base - v_act) / v_act if (v_act is not None) else float("nan")
+        dv_adj = 100.0 * (v_adj - v_act) / v_act if (v_act is not None and not np.isnan(v_adj)) else float("nan")
 
         print(f"{r['fno']:4d} {r['nose']:>6} {r['cant']:5.2f} {r['m_rocket']:6.2f} "
               f"{r['elevation']:5.1f} {r['azimuth']:5.1f} {r['T_C']:6.1f} "
-              f"{h_pred:8.1f} {h_act if h_act else float('nan'):8.1f} {dh_pct:+7.2f} "
-              f"{v_pred:7.1f} {v_act if v_act else float('nan'):7.1f} {dv_pct:+7.2f}")
+              f"{h_base:8.1f} {h_adj:8.1f} {h_act if h_act else float('nan'):8.1f} "
+              f"{dh_base:+11.2f} {dh_adj:+10.2f} "
+              f"{v_base:7.1f} {v_adj:7.1f} {v_act if v_act else float('nan'):7.1f} "
+              f"{dv_base:+11.2f} {dv_adj:+10.2f}")
 
         out_rows.append(dict(
             fno=r["fno"], nose=r["nose"], cant=r["cant"], m_rocket=r["m_rocket"],
             elevation=r["elevation"], azimuth=r["azimuth"],
             T_C=r["T_C"], p_hpa=r["p_hpa"], RH_pct=r["RH_pct"],
-            h_apo_pred=h_pred, v_max_pred=v_pred, status=status,
+            h_apo_pred_baseline=h_base, v_max_pred_baseline=v_base, status_baseline=status_base,
+            h_apo_pred_adjusted=h_adj, v_max_pred_adjusted=v_adj, status_adjusted=status_adj,
             h_apo_actual=h_act, v_max_actual=v_act,
-            dh_pct=dh_pct, dv_pct=dv_pct,
+            dh_pct_baseline=dh_base, dv_pct_baseline=dv_base,
+            dh_pct_adjusted=dh_adj, dv_pct_adjusted=dv_adj,
         ))
 
     out_dir = Path(base) / "results"
@@ -238,28 +270,38 @@ def main():
         writer.writerows(out_rows)
     print(f"\nZapisano: {csv_path}")
 
-    valid = [r for r in out_rows if r["h_apo_actual"] and not np.isnan(r["dh_pct"])]
-    if valid:
-        dh_all = np.array([r["dh_pct"] for r in valid])
-        print(f"\nBias apogeum (vs GPS/baro, per-lot masa+elewacja+atmosfera) na {len(valid)} lotach:")
-        print(f"  dh_apo: mean={np.mean(dh_all):+.2f}%  std={np.std(dh_all):.2f}%  "
-              f"[{np.min(dh_all):+.2f}%, {np.max(dh_all):+.2f}%]")
+    valid_base = [r for r in out_rows if r["h_apo_actual"] and not np.isnan(r["dh_pct_baseline"])]
+    if valid_base:
+        dh_base_all = np.array([r["dh_pct_baseline"] for r in valid_base])
+        print(f"\nBias apogeum BASELINE (usredniony silnik) na {len(valid_base)} lotach:")
+        print(f"  dh_apo: mean={np.mean(dh_base_all):+.2f}%  std={np.std(dh_base_all):.2f}%  "
+              f"[{np.min(dh_base_all):+.2f}%, {np.max(dh_base_all):+.2f}%]")
+
+    valid_adj = [r for r in out_rows if r["h_apo_actual"] and not np.isnan(r["dh_pct_adjusted"])]
+    if valid_adj:
+        dh_adj_all = np.array([r["dh_pct_adjusted"] for r in valid_adj])
+        print(f"\nBias apogeum ADJUSTED (rzeczywisty silnik tego lotu) na {len(valid_adj)} lotach:")
+        print(f"  dh_apo: mean={np.mean(dh_adj_all):+.2f}%  std={np.std(dh_adj_all):.2f}%  "
+              f"[{np.min(dh_adj_all):+.2f}%, {np.max(dh_adj_all):+.2f}%]")
 
     # ------------------------------------------------------------------
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(12, 6))
     fnos = [r["fno"] for r in out_rows]
-    dh = [r["dh_pct"] for r in out_rows]
-    colors = ["tab:blue" if r["nose"] == "ostra" else "tab:orange" for r in out_rows]
-    ax.bar([str(f) for f in fnos], dh, color=colors, alpha=0.8)
+    dh_base = [r["dh_pct_baseline"] for r in out_rows]
+    dh_adj = [r["dh_pct_adjusted"] for r in out_rows]
+    x = np.arange(len(fnos))
+    width = 0.38
+    ax.bar(x - width / 2, dh_base, width, color="tab:gray", alpha=0.8, label="baseline (usredniony silnik)")
+    ax.bar(x + width / 2, dh_adj, width, color="tab:green", alpha=0.8, label="adjusted (silnik tego lotu)")
     ax.axhline(0.0, color="k", lw=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(f) for f in fnos])
     ax.set_xlabel("Lot")
     ax.set_ylabel("Δ apogeum (pred vs actual) [%]")
-    ax.set_title("Per-lot bias apogeum (masa+elewacja/azymut+atmosfera skorygowane, "
-                 "baseline per ksztalt nosa)")
+    ax.set_title("Per-lot bias apogeum: baseline vs adjusted (silnik tego lotu) — "
+                 "baseline geometrii per ksztalt nosa")
     ax.grid(alpha=0.3)
-    from matplotlib.patches import Patch
-    ax.legend(handles=[Patch(color="tab:blue", label=f"ostra ({args.case_ostra})"),
-                        Patch(color="tab:orange", label=f"tepa ({args.case_tepa})")], fontsize=9)
+    ax.legend(fontsize=9)
     plt.tight_layout()
     out_png = out_dir / "per_flight_6dof_per_nose.png"
     plt.savefig(out_png, dpi=140, bbox_inches="tight")
