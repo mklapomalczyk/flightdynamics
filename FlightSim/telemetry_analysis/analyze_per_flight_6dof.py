@@ -79,7 +79,7 @@ from forces.force_model6 import ForceModel6DOF
 from core.solver6 import run_simulation_6dof
 from core.state6 import State6DOF
 from imu_reconstruction import detect_ignition
-from diag_drag import detect_events
+from diag_drag import detect_events, smooth_gps_derivative
 from gps_fusion import latlon_to_enu
 from models.wind import create_wind
 from analyze_wind_sensitivity import read_measured_wind
@@ -206,6 +206,45 @@ def actual_range_at_apogee(base, fno, azimuth_deg):
     downrange, crossrange = downrange_crossrange(e[0], n[0], azimuth_deg)
     rng = float(np.hypot(downrange, crossrange))
     return float(downrange), float(crossrange), rng
+
+
+def actual_range_at_impact(base, fno, azimuth_deg):
+    """Jak actual_range_at_apogee(), ale w OSTATNIEJ znanej probce telemetrii
+    (i_end z diag_drag.detect_events(), flaga spadochronu zignorowana -- patrz
+    analyze_impact_point.py) zamiast apogeum, plus predkosc calkowita
+    (horyzontalna+wertykalna) w tej probce. UWAGA: i_end NIE jest realnym
+    ladowaniem (GPS tam zwykle juz zamrozone/nieaktualne -- patrz
+    analyze_impact_point.py), tylko ostatnia znana pozycja/predkosc."""
+    fpath = resolve_data_file(f"ARTEMIDA_{fno}_LOT.txt")
+    if not fpath.exists():
+        return None, None, None, None
+    tel = parse_telemetry(fpath, verbose=False)
+    t_ign_abs = detect_ignition(tel)
+    i_ign, _, i_apo, i_end = detect_events(tel, t_ign_abs)
+    lat0, lon0 = tel.lat[i_ign], tel.lon[i_ign]
+    e, n = latlon_to_enu(tel.lat, tel.lon, lat0, lon0)
+    downrange, crossrange = downrange_crossrange(e[i_end], n[i_end], azimuth_deg)
+    rng = float(np.hypot(downrange, crossrange))
+
+    t = tel.time
+    mask = np.abs(t - t[i_end]) <= 0.6
+    if np.sum(mask) < 3:
+        mask = slice(max(0, i_end - 2), i_end + 3)
+    tt = t[mask]
+    Vh = 0.0
+    if np.ptp(tt) > 0:
+        ve = np.polyfit(tt, e[mask], 1)[0]
+        vn = np.polyfit(tt, n[mask], 1)[0]
+        Vh = float(np.hypot(ve, vn))
+
+    v_descent = float("nan")
+    if i_end - i_apo >= 5:
+        dhdt = smooth_gps_derivative(tel.alt_onboard[i_apo:i_end + 1], tel.time[i_apo:i_end + 1], window_s=0.6)
+        n_pts = len(dhdt)
+        v_descent = float(-np.mean(dhdt[int(n_pts * 0.8):]))
+    speed = float(np.hypot(Vh, v_descent)) if np.isfinite(v_descent) else Vh
+
+    return float(downrange), float(crossrange), rng, speed
 
 
 # --------------------------------------------------------------------------
@@ -363,6 +402,8 @@ def main():
 
         h_act, v_act = actual_apogee_vmax(base, r["fno"])
         dr_act, cr_act, rng_act = actual_range_at_apogee(base, r["fno"], r["azimuth"])
+        dr_imp_act, cr_imp_act, rng_imp_act, speed_imp_act = actual_range_at_impact(
+            base, r["fno"], r["azimuth"])
 
         dh_base = 100.0 * (h_base - h_act) / h_act if h_act else float("nan")
         dh_adj = 100.0 * (h_adj - h_act) / h_act if (h_act and not np.isnan(h_adj)) else float("nan")
@@ -398,6 +439,11 @@ def main():
             range_apo_pred_adjusted_m=rng_adj,
             downrange_apo_actual_m=dr_act, crossrange_apo_actual_m=cr_act,
             range_apo_actual_m=rng_act,
+            # Ostatnia znana pozycja/predkosc z telemetrii (i_end, flaga
+            # spadochronu zignorowana) -- NIE realne ladowanie, patrz
+            # actual_range_at_impact()/analyze_impact_point.py.
+            downrange_impact_actual_m=dr_imp_act, crossrange_impact_actual_m=cr_imp_act,
+            range_impact_actual_m=rng_imp_act, speed_impact_actual_mps=speed_imp_act,
             crossrange_err_baseline_m=dcr_base, crossrange_err_adjusted_m=dcr_adj,
             # Punkt/czas upadku BALISTYCZNY z modelu (bez chutu, patrz run_one) --
             # odniesienie dla analyze_impact_point.py, NIE realna predykcja
@@ -509,41 +555,51 @@ def main():
     make_comparison_figure(out_rows, "adjusted_wind", out_dir / "per_flight_6dof_adjusted_wind.png")
 
 
+def _err(out_rows, pred_key, act_key):
+    """(model - actual) per lot, NaN gdzie ktorakolwiek wartosc brakuje."""
+    out = []
+    for r in out_rows:
+        p, a = r.get(pred_key), r.get(act_key)
+        try:
+            out.append(float(p) - float(a) if (p not in (None, "") and a not in (None, "")) else float("nan"))
+        except (TypeError, ValueError):
+            out.append(float("nan"))
+    return out
+
+
 def make_comparison_figure(out_rows, variant, out_png):
-    """Jedna figura (4 panele) pred vs actual dla danego wariantu silnika
-    ('baseline'=usredniony profil ciagu z YAML, 'adjusted'=rzeczywisty
-    profil ciagu tego lotu): apogeum, V_max, downrange@apogeum,
-    crossrange@apogeum -- wszystkie loty na jednym wykresie per panel."""
+    """Jedna figura (6 paneli) BLAD (model - actual) dla danego wariantu
+    silnika ('baseline'=usredniony profil ciagu z YAML, 'adjusted'=
+    rzeczywisty profil ciagu tego lotu, 'adjusted_wind'=jak adjusted +
+    zmierzony wiatr): apogeum, V_max, downrange/crossrange @ apogeum,
+    oraz downrange/predkosc w OSTATNIEJ znanej probce telemetrii
+    ("impact" = i_end, NIE realne ladowanie -- patrz
+    actual_range_at_impact()/analyze_impact_point.py) -- wszystkie loty
+    na jednym wykresie per panel."""
     fnos = [r["fno"] for r in out_rows]
     x = np.arange(len(fnos))
-    width = 0.38
+    width = 0.6
 
-    h_pred = [r[f"h_apo_pred_{variant}"] for r in out_rows]
-    h_act = [r["h_apo_actual"] if r["h_apo_actual"] else float("nan") for r in out_rows]
-    v_pred = [r[f"v_max_pred_{variant}"] for r in out_rows]
-    v_act = [r["v_max_actual"] if r["v_max_actual"] else float("nan") for r in out_rows]
-    dr_pred = [r[f"downrange_apo_pred_{variant}_m"] for r in out_rows]
-    dr_act = [r["downrange_apo_actual_m"] if r["downrange_apo_actual_m"] else float("nan") for r in out_rows]
-    cr_pred = [r[f"crossrange_apo_pred_{variant}_m"] for r in out_rows]
-    cr_act = [r["crossrange_apo_actual_m"] if r["crossrange_apo_actual_m"] else float("nan") for r in out_rows]
-
-    fig, axes = plt.subplots(2, 2, figsize=(14, 9))
-    panels = [
-        (axes[0, 0], h_pred, h_act, "Apogeum [m AGL]"),
-        (axes[0, 1], v_pred, v_act, "V_max [m/s]"),
-        (axes[1, 0], dr_pred, dr_act, "Downrange @ apogeum [m]"),
-        (axes[1, 1], cr_pred, cr_act, "Crossrange @ apogeum [m]"),
+    panels_def = [
+        (f"h_apo_pred_{variant}", "h_apo_actual", "Blad apogeum [m]"),
+        (f"v_max_pred_{variant}", "v_max_actual", "Blad V_max [m/s]"),
+        (f"downrange_apo_pred_{variant}_m", "downrange_apo_actual_m", "Blad downrange @ apogeum [m]"),
+        (f"crossrange_apo_pred_{variant}_m", "crossrange_apo_actual_m", "Blad crossrange @ apogeum [m]"),
+        (f"impact_downrange_{variant}_m", "downrange_impact_actual_m", "Blad downrange @ impact* [m]"),
+        (f"impact_speed_{variant}_mps", "speed_impact_actual_mps", "Blad predkosci @ impact* [m/s]"),
     ]
-    for ax, pred, act, label in panels:
-        ax.bar(x - width / 2, pred, width, color="tab:blue", alpha=0.8, label="model")
-        ax.bar(x + width / 2, act, width, color="tab:orange", alpha=0.8, label="actual (GPS)")
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 9))
+    for ax, (pred_key, act_key, label) in zip(axes.flat, panels_def):
+        err = _err(out_rows, pred_key, act_key)
+        colors = ["tab:red" if (np.isfinite(e) and e > 0) else "tab:blue" for e in err]
+        ax.bar(x, err, width, color=colors, alpha=0.85)
         ax.axhline(0.0, color="k", lw=0.8)
         ax.set_xticks(x)
         ax.set_xticklabels([str(f) for f in fnos])
         ax.set_xlabel("Lot")
         ax.set_ylabel(label)
         ax.grid(alpha=0.3)
-        ax.legend(fontsize=9)
 
     nice_names = {
         "baseline": "BASELINE (usredniony profil ciagu)",
@@ -551,7 +607,9 @@ def make_comparison_figure(out_rows, variant, out_png):
         "adjusted_wind": "ADJUSTED + ZMIERZONY WIATR (profil ciagu tego lotu + Open-Meteo gust)",
     }
     nice_name = nice_names.get(variant, variant)
-    fig.suptitle(f"Model 6DOF vs dane polowe — {nice_name}", fontsize=13)
+    fig.suptitle(f"Blad modelu 6DOF (model - actual) — {nice_name}\n"
+                 "*impact = ostatnia znana probka telemetrii, NIE realne ladowanie (patrz analyze_impact_point.py)",
+                 fontsize=12)
     plt.tight_layout()
     plt.savefig(out_png, dpi=140, bbox_inches="tight")
     plt.close()
