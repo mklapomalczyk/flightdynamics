@@ -17,6 +17,19 @@ Metoda — ten sam pipeline 6DOF co MAIN.py, izolowana zmienna = wiatr:
   aby znalezc jaka predkosc/kierunek odtwarza zmierzony deficyt
   apogeum.
 
+  Dodatkowo: zmierzony wiatr WCZYTANY z
+  field_test_data/results/launch_weather_openmeteo.csv (wygenerowany
+  przez analyze_launch_weather.py — wind_speed_10m_mps,
+  wind_dir_rel_azimuth_deg, wind_gust_10m_mps per lot, NIE
+  hardcodowany w tym skrypcie) — jeden przebieg steady-state przy
+  zmierzonej predkosci/kierunku, plus skan PowerLawGustWind po
+  fazie/okresie podmuchu (amplituda = zmierzony gust/sredni - 1)
+  szukajacy NAJGORSZEGO przypadku (gust w trakcie max-Q/wysokiego AoA)
+  jako GORNA GRANICE wplywu wiatru zmiennego w czasie — patrz UWAGA w
+  models/wind.py: faza/okres nie sa zwalidowane wzgledem
+  rzeczywistego podmuchu (wymaga >1 strzalu). Jesli CSV nie istnieje,
+  ta czesc jest pomijana (uruchom najpierw analyze_launch_weather.py).
+
   cant_angle: per-lot (lot 18 = 0 deg, lot 20 = 0.6 deg, z
   field_test_data/configs.txt) — generowany jest TYMCZASOWY YAML
   (kopia configurations/<case>.yaml z nadpisanym cant_angle plotek),
@@ -69,6 +82,29 @@ WIND_HEADINGS_REL = {
     "crosswind": 90.0,
     "tailwind": 180.0,
 }
+
+GUST_PERIODS_S  = [1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0, 15.0]
+GUST_PHASES_RAD = [i * np.pi / 4.0 for i in range(8)]   # 0..7pi/4, krok 45deg
+
+
+def read_measured_wind(base, fno):
+    """Wczytuje zmierzony wiatr (Open-Meteo) dla lotu fno z
+    field_test_data/results/launch_weather_openmeteo.csv (wygenerowany
+    przez analyze_launch_weather.py). Zwraca None jesli plik/wiersz nie
+    istnieje (np. analyze_launch_weather.py nie zostal jeszcze uruchomiony
+    - wymaga internetu, patrz jego docstring)."""
+    csv_path = Path(base) / "results" / "launch_weather_openmeteo.csv"
+    if not csv_path.exists():
+        return None
+    with open(csv_path, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            if int(row["fno"]) == fno:
+                return dict(
+                    mean_speed_mps=float(row["wind_speed_10m_mps"]),
+                    gust_speed_mps=float(row["wind_gust_10m_mps"]),
+                    rel_az_deg=float(row["wind_dir_rel_azimuth_deg"]),
+                )
+    return None
 
 
 def build_initial_state_for(elevation_deg, azimuth_deg):
@@ -163,6 +199,56 @@ def main():
                 print(f"    horizontal  {heading_name:10s} {speed:5.1f} m/s -> "
                       f"h_apo={h_w:7.1f} m  ({dh_pct:+6.1f}% vs no-wind)  "
                       f"status={status_w}")
+
+        # ---- Zmierzony wiatr (Open-Meteo): steady + skan podmuchu ---- #
+        mw = read_measured_wind(base, fno)
+        if mw is None:
+            print(f"  [pominieto] brak results/launch_weather_openmeteo.csv dla lotu {fno} "
+                  f"-> uruchom najpierw analyze_launch_weather.py")
+            continue
+        dir_from_meas = (fl["azimuth_deg"] + mw["rel_az_deg"]) % 360.0
+
+        wind_steady = create_wind("horizontal", speed_mps=mw["mean_speed_mps"],
+                                   dir_from_deg=dir_from_meas, azimuth_deg=fl["azimuth_deg"])
+        h_steady, v_steady, status_steady = run_one(atm, mass, prop, geom, gravity, launcher,
+                                                     aero, x0, wind_model=wind_steady)
+        dh_steady_pct = 100.0 * (h_steady - h_nowind) / h_nowind
+        out_rows.append(dict(
+            fno=fno, cant_angle_deg=cant, model="measured_steady", heading="measured",
+            speed_mps=mw["mean_speed_mps"], h_apo_m=h_steady, v_max_mps=v_steady,
+            status=status_steady, dh_pct_vs_nowind=dh_steady_pct,
+            h_apo_actual=fl["h_apo_actual"], deficit_to_explain_pct=deficit_actual_pct,
+        ))
+        print(f"  Zmierzony wiatr (steady {mw['mean_speed_mps']:.0f} m/s, "
+              f"rel_az={mw['rel_az_deg']:.0f} deg) -> h_apo={h_steady:7.1f} m "
+              f"({dh_steady_pct:+.1f}% vs no-wind)  status={status_steady}")
+
+        gust_amp = mw["gust_speed_mps"] / mw["mean_speed_mps"] - 1.0
+        worst_h, worst_T, worst_phase = h_steady, None, None
+        for T in GUST_PERIODS_S:
+            for phase in GUST_PHASES_RAD:
+                wind_gust = create_wind(
+                    "power_law_gust", speed_ref_mps=mw["mean_speed_mps"],
+                    dir_from_deg=dir_from_meas, azimuth_deg=fl["azimuth_deg"],
+                    h_ref_m=10.0, alpha_exp=0.16,
+                    gust_amp=gust_amp, gust_period_s=T, gust_phase_rad=phase,
+                )
+                h_g, v_g, status_g = run_one(atm, mass, prop, geom, gravity, launcher,
+                                              aero, x0, wind_model=wind_gust)
+                dh_g_pct = 100.0 * (h_g - h_nowind) / h_nowind
+                out_rows.append(dict(
+                    fno=fno, cant_angle_deg=cant, model="measured_gust",
+                    heading=f"T={T:g}s_phase={phase:.2f}rad",
+                    speed_mps=mw["mean_speed_mps"], h_apo_m=h_g, v_max_mps=v_g,
+                    status=status_g, dh_pct_vs_nowind=dh_g_pct,
+                    h_apo_actual=fl["h_apo_actual"], deficit_to_explain_pct=deficit_actual_pct,
+                ))
+                if h_g < worst_h:
+                    worst_h, worst_T, worst_phase = h_g, T, phase
+        worst_dh_pct = 100.0 * (worst_h - h_nowind) / h_nowind
+        print(f"  Najgorszy podmuch (gust_amp={gust_amp:.2f}, T={worst_T:g}s, "
+              f"phase={worst_phase:.2f} rad) -> h_apo={worst_h:7.1f} m "
+              f"({worst_dh_pct:+.1f}% vs no-wind)")
 
     out_dir = Path(base) / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
