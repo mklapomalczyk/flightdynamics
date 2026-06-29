@@ -553,6 +553,9 @@ def main():
     make_comparison_figure(out_rows, "baseline", out_dir / "per_flight_6dof_baseline.png")
     make_comparison_figure(out_rows, "adjusted", out_dir / "per_flight_6dof_adjusted.png")
     make_comparison_figure(out_rows, "adjusted_wind", out_dir / "per_flight_6dof_adjusted_wind.png")
+    make_comparison_figure_pct(out_rows, "baseline", out_dir / "per_flight_6dof_baseline_pct.png")
+    make_comparison_figure_pct(out_rows, "adjusted", out_dir / "per_flight_6dof_adjusted_pct.png")
+    make_comparison_figure_pct(out_rows, "adjusted_wind", out_dir / "per_flight_6dof_adjusted_wind_pct.png")
 
 
 def _err(out_rows, pred_key, act_key):
@@ -567,53 +570,80 @@ def _err(out_rows, pred_key, act_key):
     return out
 
 
-def make_comparison_figure(out_rows, variant, out_png):
-    """Jedna figura (6 paneli) BLAD (model - actual) dla danego wariantu
-    silnika ('baseline'=usredniony profil ciagu z YAML, 'adjusted'=
-    rzeczywisty profil ciagu tego lotu, 'adjusted_wind'=jak adjusted +
-    zmierzony wiatr): apogeum, V_max, downrange/crossrange @ apogeum,
-    oraz downrange/predkosc w OSTATNIEJ znanej probce telemetrii
-    ("impact" = i_end, NIE realne ladowanie -- patrz
-    actual_range_at_impact()/analyze_impact_point.py) -- wszystkie loty
-    na jednym wykresie per panel."""
+def _err_pct(out_rows, pred_key, act_key):
+    """Blad wzgledny (model - actual) / |actual| * 100 [%] per lot, NaN
+    gdzie ktorakolwiek wartosc brakuje lub actual==0 (dzielenie przez
+    zero -> brak sensu fizycznego, np. crossrange=0)."""
+    out = []
+    for r in out_rows:
+        p, a = r.get(pred_key), r.get(act_key)
+        try:
+            pf, af = float(p), float(a)
+            out.append((pf - af) / abs(af) * 100.0 if (p not in (None, "") and a not in (None, "") and af != 0.0)
+                        else float("nan"))
+        except (TypeError, ValueError):
+            out.append(float("nan"))
+    return out
+
+
+_NICE_NAMES = {
+    "baseline": "BASELINE (usredniony profil ciagu)",
+    "adjusted": "ADJUSTED (profil ciagu tego lotu)",
+    "adjusted_wind": "ADJUSTED + ZMIERZONY WIATR (profil ciagu tego lotu + Open-Meteo gust)",
+}
+
+_IMPACT_CAVEAT = ("*impact = ostatnia znana probka telemetrii, NIE realne ladowanie "
+                  "(patrz analyze_impact_point.py)")
+
+_PANELS_DEF = [
+    (f"h_apo_pred_{{0}}", "h_apo_actual", "apogeum", "m"),
+    (f"v_max_pred_{{0}}", "v_max_actual", "V_max", "m/s"),
+    (f"downrange_apo_pred_{{0}}_m", "downrange_apo_actual_m", "downrange @ apogeum", "m"),
+    (f"crossrange_apo_pred_{{0}}_m", "crossrange_apo_actual_m", "crossrange @ apogeum", "m"),
+    (f"impact_downrange_{{0}}_m", "downrange_impact_actual_m", "downrange @ impact*", "m"),
+    (f"impact_speed_{{0}}_mps", "speed_impact_actual_mps", "predkosc @ impact*", "m/s"),
+]
+
+
+def _plot_error_grid(out_rows, variant, out_png, pct: bool):
+    """Wspolny rdzen dla figury bledu absolutnego (pct=False) i
+    wzglednego w % (pct=True), 2x3 panele, wszystkie loty na jednym
+    wykresie per panel."""
     fnos = [r["fno"] for r in out_rows]
     x = np.arange(len(fnos))
     width = 0.6
 
-    panels_def = [
-        (f"h_apo_pred_{variant}", "h_apo_actual", "Blad apogeum [m]"),
-        (f"v_max_pred_{variant}", "v_max_actual", "Blad V_max [m/s]"),
-        (f"downrange_apo_pred_{variant}_m", "downrange_apo_actual_m", "Blad downrange @ apogeum [m]"),
-        (f"crossrange_apo_pred_{variant}_m", "crossrange_apo_actual_m", "Blad crossrange @ apogeum [m]"),
-        (f"impact_downrange_{variant}_m", "downrange_impact_actual_m", "Blad downrange @ impact* [m]"),
-        (f"impact_speed_{variant}_mps", "speed_impact_actual_mps", "Blad predkosci @ impact* [m/s]"),
-    ]
-
     fig, axes = plt.subplots(2, 3, figsize=(18, 9))
-    for ax, (pred_key, act_key, label) in zip(axes.flat, panels_def):
-        err = _err(out_rows, pred_key, act_key)
+    for ax, (pred_tpl, act_key, name, unit) in zip(axes.flat, _PANELS_DEF):
+        pred_key = pred_tpl.format(variant)
+        err = _err_pct(out_rows, pred_key, act_key) if pct else _err(out_rows, pred_key, act_key)
         colors = ["tab:red" if (np.isfinite(e) and e > 0) else "tab:blue" for e in err]
         ax.bar(x, err, width, color=colors, alpha=0.85)
         ax.axhline(0.0, color="k", lw=0.8)
         ax.set_xticks(x)
         ax.set_xticklabels([str(f) for f in fnos])
         ax.set_xlabel("Lot")
-        ax.set_ylabel(label)
+        ax.set_ylabel(f"Blad {name} [%]" if pct else f"Blad {name} [{unit}]")
         ax.grid(alpha=0.3)
 
-    nice_names = {
-        "baseline": "BASELINE (usredniony profil ciagu)",
-        "adjusted": "ADJUSTED (profil ciagu tego lotu)",
-        "adjusted_wind": "ADJUSTED + ZMIERZONY WIATR (profil ciagu tego lotu + Open-Meteo gust)",
-    }
-    nice_name = nice_names.get(variant, variant)
-    fig.suptitle(f"Blad modelu 6DOF (model - actual) — {nice_name}\n"
-                 "*impact = ostatnia znana probka telemetrii, NIE realne ladowanie (patrz analyze_impact_point.py)",
-                 fontsize=12)
+    nice_name = _NICE_NAMES.get(variant, variant)
+    kind = "wzgledny (model - actual) / |actual| * 100%" if pct else "(model - actual)"
+    fig.suptitle(f"Blad modelu 6DOF {kind} — {nice_name}\n{_IMPACT_CAVEAT}", fontsize=12)
     plt.tight_layout()
     plt.savefig(out_png, dpi=140, bbox_inches="tight")
     plt.close()
     print(f"Zapisano: {out_png}")
+
+
+def make_comparison_figure(out_rows, variant, out_png):
+    """Figura bledu absolutnego (model - actual), patrz _plot_error_grid."""
+    _plot_error_grid(out_rows, variant, out_png, pct=False)
+
+
+def make_comparison_figure_pct(out_rows, variant, out_png):
+    """Figura bledu wzglednego w % ((model - actual) / |actual| * 100),
+    patrz _plot_error_grid."""
+    _plot_error_grid(out_rows, variant, out_png, pct=True)
 
 
 if __name__ == "__main__":
