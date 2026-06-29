@@ -17,14 +17,18 @@ Metoda — ten sam pipeline 6DOF co MAIN.py, izolowana zmienna = wiatr:
   aby znalezc jaka predkosc/kierunek odtwarza zmierzony deficyt
   apogeum.
 
-  Dodatkowo: zmierzony wiatr z analyze_launch_weather.py (Open-Meteo,
-  ~15 m/s sredni @ rel_az~120 deg wzgledem azymutu — mieszanka
-  burtowy/z wiatrem, NIE pod wiatr — wiec sam steady-state NIE
-  wyjasnia deficytu) + skan PowerLawGustWind po fazie/okresie podmuchu
-  (33-35 m/s zmierzone) szukajacy NAJGORSZEGO przypadku (gust w
-  trakcie max-Q/wysokiego AoA) jako GORNA GRANICE wplywu wiatru
-  zmiennego w czasie — patrz UWAGA w models/wind.py: faza/okres nie sa
-  zwalidowane wzgledem rzeczywistego podmuchu (wymaga >1 strzalu).
+  Dodatkowo: zmierzony wiatr WCZYTANY z
+  field_test_data/results/launch_weather_openmeteo.csv (wygenerowany
+  przez analyze_launch_weather.py — wind_speed_10m_mps,
+  wind_dir_rel_azimuth_deg, wind_gust_10m_mps per lot, NIE
+  hardcodowany w tym skrypcie) — jeden przebieg steady-state przy
+  zmierzonej predkosci/kierunku, plus skan PowerLawGustWind po
+  fazie/okresie podmuchu (amplituda = zmierzony gust/sredni - 1)
+  szukajacy NAJGORSZEGO przypadku (gust w trakcie max-Q/wysokiego AoA)
+  jako GORNA GRANICE wplywu wiatru zmiennego w czasie — patrz UWAGA w
+  models/wind.py: faza/okres nie sa zwalidowane wzgledem
+  rzeczywistego podmuchu (wymaga >1 strzalu). Jesli CSV nie istnieje,
+  ta czesc jest pomijana (uruchom najpierw analyze_launch_weather.py).
 
   cant_angle: per-lot (lot 18 = 0 deg, lot 20 = 0.6 deg, z
   field_test_data/configs.txt) — generowany jest TYMCZASOWY YAML
@@ -79,15 +83,28 @@ WIND_HEADINGS_REL = {
     "tailwind": 180.0,
 }
 
-# Zmierzony wiatr w dniu/godzinie lotow 18/20 (Open-Meteo, patrz
-# analyze_launch_weather.py): ~15 m/s sredni, rel_az~120 deg (mieszanka
-# burtowy/z wiatrem, NIE pod wiatr), podmuchy 33-35 m/s (gust_amp~1.2-1.3x
-# sredniej). Steady-state przy tym kierunku powinien WSPOMAGAC apogeum
-# (skladowa z wiatrem dominuje nad burtowa) — wiec deficyt MUSI pochodzic
-# z PODMUCHU podczas wznoszenia (max-Q/wysoki AoA), nie ze sredniej.
-MEASURED_WIND = dict(mean_speed_mps=15.0, gust_speed_mps=34.0, rel_az_deg=120.0)
 GUST_PERIODS_S  = [1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0, 15.0]
 GUST_PHASES_RAD = [i * np.pi / 4.0 for i in range(8)]   # 0..7pi/4, krok 45deg
+
+
+def read_measured_wind(base, fno):
+    """Wczytuje zmierzony wiatr (Open-Meteo) dla lotu fno z
+    field_test_data/results/launch_weather_openmeteo.csv (wygenerowany
+    przez analyze_launch_weather.py). Zwraca None jesli plik/wiersz nie
+    istnieje (np. analyze_launch_weather.py nie zostal jeszcze uruchomiony
+    - wymaga internetu, patrz jego docstring)."""
+    csv_path = Path(base) / "results" / "launch_weather_openmeteo.csv"
+    if not csv_path.exists():
+        return None
+    with open(csv_path, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            if int(row["fno"]) == fno:
+                return dict(
+                    mean_speed_mps=float(row["wind_speed_10m_mps"]),
+                    gust_speed_mps=float(row["wind_gust_10m_mps"]),
+                    rel_az_deg=float(row["wind_dir_rel_azimuth_deg"]),
+                )
+    return None
 
 
 def build_initial_state_for(elevation_deg, azimuth_deg):
@@ -184,7 +201,11 @@ def main():
                       f"status={status_w}")
 
         # ---- Zmierzony wiatr (Open-Meteo): steady + skan podmuchu ---- #
-        mw = MEASURED_WIND
+        mw = read_measured_wind(base, fno)
+        if mw is None:
+            print(f"  [pominieto] brak results/launch_weather_openmeteo.csv dla lotu {fno} "
+                  f"-> uruchom najpierw analyze_launch_weather.py")
+            continue
         dir_from_meas = (fl["azimuth_deg"] + mw["rel_az_deg"]) % 360.0
 
         wind_steady = create_wind("horizontal", speed_mps=mw["mean_speed_mps"],
