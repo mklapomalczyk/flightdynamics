@@ -81,6 +81,34 @@ from core.state6 import State6DOF
 from imu_reconstruction import detect_ignition
 from diag_drag import detect_events
 from gps_fusion import latlon_to_enu
+from models.wind import create_wind
+from analyze_wind_sensitivity import read_measured_wind
+
+# Domyslny okres/faza podmuchu dla PowerLawGustWind -- NIE zwalidowane
+# wzgledem rzeczywistego podmuchu (wymaga >1 strzalu, patrz models/wind.py
+# i analyze_wind_sensitivity.py); tu uzywane jako JEDNA reprezentatywna
+# probka (nie worst-case ze skanu), zeby pokazac rzad wielkosci wplywu
+# wiatru na apogeum/zasieg, nie gorna granice.
+GUST_PERIOD_S = 3.0
+GUST_PHASE_RAD = 0.0
+
+
+def build_flight_wind(base, fno, azimuth_deg):
+    """PowerLawGustWind z faktycznie zmierzonego wiatru dla tego lotu
+    (Open-Meteo, field_test_data/results/launch_weather_openmeteo.csv) --
+    gust_amp = gust/mean - 1. Zwraca None jesli brak pliku/wiersza dla
+    tego lotu (uruchom najpierw analyze_launch_weather.py)."""
+    mw = read_measured_wind(base, fno)
+    if mw is None or mw["mean_speed_mps"] <= 0:
+        return None
+    dir_from_deg = (azimuth_deg + mw["rel_az_deg"]) % 360.0
+    gust_amp = mw["gust_speed_mps"] / mw["mean_speed_mps"] - 1.0
+    return create_wind(
+        "power_law_gust", speed_ref_mps=mw["mean_speed_mps"],
+        dir_from_deg=dir_from_deg, azimuth_deg=azimuth_deg,
+        h_ref_m=10.0, alpha_exp=0.16,
+        gust_amp=gust_amp, gust_period_s=GUST_PERIOD_S, gust_phase_rad=GUST_PHASE_RAD,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -203,10 +231,11 @@ def build_scaled_mass(cfg, t_ignition, m_rocket_flight):
     )
 
 
-def run_one(aero, geom, atm, gravity, launcher, mass, prop, initial_state):
+def run_one(aero, geom, atm, gravity, launcher, mass, prop, initial_state, wind_model=None):
     force_model = ForceModel6DOF(
         atmosphere=atm, mass_model=mass, aero_model=aero,
         gravity=gravity, geometry=geom, propulsion=prop, launcher=launcher,
+        wind_model=wind_model,
     )
     result = run_simulation_6dof(force_model, initial_state, t_max=100, dt_output=0.02,
                                   rtol=1e-6, atol=1e-8, max_step=0.05)
@@ -311,6 +340,27 @@ def main():
             dr_adj, cr_adj, rng_adj = float("nan"), float("nan"), float("nan")
             idr_adj, icr_adj, irng_adj, it_adj, isp_adj = (float("nan"),) * 5
 
+        # Adjusted + wiatr: rzeczywisty profil ciagu TEGO lotu + zmierzony
+        # wiatr (PowerLawGustWind, Open-Meteo) -- izoluje wplyw wiatru na
+        # gornej warstwie modelu juz skorygowanego o ciag.
+        wind = build_flight_wind(base, r["fno"], r["azimuth"])
+        if prop_flight is not None and wind is not None:
+            try:
+                (h_wind, v_wind, status_wind,
+                 dr_wind, cr_wind, rng_wind,
+                 idr_wind, icr_wind, irng_wind, it_wind, isp_wind) = run_one(
+                    aero, geom, atm, gravity, launcher, mass, prop_flight, initial_state,
+                    wind_model=wind)
+            except Exception as e:
+                h_wind, v_wind, status_wind = float("nan"), float("nan"), f"error:{e}"
+                dr_wind, cr_wind, rng_wind = float("nan"), float("nan"), float("nan")
+                idr_wind, icr_wind, irng_wind, it_wind, isp_wind = (float("nan"),) * 5
+        else:
+            h_wind, v_wind = float("nan"), float("nan")
+            status_wind = "no_thrust_calib" if prop_flight is None else "no_measured_wind"
+            dr_wind, cr_wind, rng_wind = float("nan"), float("nan"), float("nan")
+            idr_wind, icr_wind, irng_wind, it_wind, isp_wind = (float("nan"),) * 5
+
         h_act, v_act = actual_apogee_vmax(base, r["fno"])
         dr_act, cr_act, rng_act = actual_range_at_apogee(base, r["fno"], r["azimuth"])
 
@@ -325,9 +375,13 @@ def main():
         # od wiatru/turbulencji, ktore daja odchylenia w obie strony.
         dcr_base = (cr_base - cr_act) if (cr_act is not None and not np.isnan(cr_base)) else float("nan")
         dcr_adj = (cr_adj - cr_act) if (cr_act is not None and not np.isnan(cr_adj)) else float("nan")
+        dcr_wind = (cr_wind - cr_act) if (cr_act is not None and not np.isnan(cr_wind)) else float("nan")
+
+        dh_wind = 100.0 * (h_wind - h_act) / h_act if (h_act and not np.isnan(h_wind)) else float("nan")
+        dv_wind = 100.0 * (v_wind - v_act) / v_act if (v_act is not None and not np.isnan(v_wind)) else float("nan")
 
         print(f"  lot {r['fno']:3d} ({r['nose']}, cant={r['cant']:.2f} deg): "
-              f"status baseline={status_base}  adjusted={status_adj}")
+              f"status baseline={status_base}  adjusted={status_adj}  adjusted+wind={status_wind}")
 
         out_rows.append(dict(
             fno=r["fno"], nose=r["nose"], cant=r["cant"], m_rocket=r["m_rocket"],
@@ -354,6 +408,20 @@ def main():
             impact_downrange_adjusted_m=idr_adj, impact_crossrange_adjusted_m=icr_adj,
             impact_range_adjusted_m=irng_adj, impact_t_adjusted_s=it_adj,
             impact_speed_adjusted_mps=isp_adj,
+            # Adjusted + zmierzony wiatr (PowerLawGustWind, Open-Meteo) -- patrz
+            # build_flight_wind()/GUST_PERIOD_S/GUST_PHASE_RAD: faza/okres
+            # podmuchu NIE zwalidowane wzgledem rzeczywistego podmuchu, to
+            # JEDNA reprezentatywna probka, nie gorna granica (w odroznieniu
+            # od skanu worst-case w analyze_wind_sensitivity.py).
+            h_apo_pred_adjusted_wind=h_wind, v_max_pred_adjusted_wind=v_wind,
+            status_adjusted_wind=status_wind,
+            dh_pct_adjusted_wind=dh_wind, dv_pct_adjusted_wind=dv_wind,
+            downrange_apo_pred_adjusted_wind_m=dr_wind, crossrange_apo_pred_adjusted_wind_m=cr_wind,
+            range_apo_pred_adjusted_wind_m=rng_wind,
+            crossrange_err_adjusted_wind_m=dcr_wind,
+            impact_downrange_adjusted_wind_m=idr_wind, impact_crossrange_adjusted_wind_m=icr_wind,
+            impact_range_adjusted_wind_m=irng_wind, impact_t_adjusted_wind_s=it_wind,
+            impact_speed_adjusted_wind_mps=isp_wind,
         ))
 
     out_dir = Path(base) / "results"
@@ -379,6 +447,17 @@ def main():
         print(f"  dh_apo: mean={np.mean(dh_adj_all):+.2f}%  std={np.std(dh_adj_all):.2f}%  "
               f"[{np.min(dh_adj_all):+.2f}%, {np.max(dh_adj_all):+.2f}%]")
 
+    valid_wind = [r for r in out_rows if r["h_apo_actual"] and not np.isnan(r["dh_pct_adjusted_wind"])]
+    if valid_wind:
+        dh_wind_all = np.array([r["dh_pct_adjusted_wind"] for r in valid_wind])
+        print(f"\nBias apogeum ADJUSTED+WIND (silnik tego lotu + zmierzony wiatr Open-Meteo) "
+              f"na {len(valid_wind)} lotach:")
+        print(f"  dh_apo: mean={np.mean(dh_wind_all):+.2f}%  std={np.std(dh_wind_all):.2f}%  "
+              f"[{np.min(dh_wind_all):+.2f}%, {np.max(dh_wind_all):+.2f}%]")
+    else:
+        print("\n[brak lotow z policzonym ADJUSTED+WIND -- sprawdz czy istnieje "
+              "results/launch_weather_openmeteo.csv (analyze_launch_weather.py)]")
+
     # Crossrange (odchylenie boczne od azymutu strzalu przy apogeum, model
     # vs GPS): test niewspolosiowosci dyszy. Wiatr/turbulencja daje odchylenia
     # w obie strony (mean ~ 0, std duze); trwala niewspolosiowosc dyszy daje
@@ -401,9 +480,33 @@ def main():
                   "niestabilne miedzy lotami) -> bardziej zgodne z wiatrem/szumem "
                   "GPS niz z trwala niewspolosiowoscia dyszy.")
 
+    # To samo, ale PO dolozeniu zmierzonego wiatru do modelu -- jesli
+    # odchylenie systematyczne PRZETRWA (mean/std/zgodny znak podobne lub
+    # silniejsze niz bez wiatru), to wiatr NIE wyjasnia crossrange i
+    # hipoteza trwalej niewspolosiowosci/asymetrii pozostaje w grze;
+    # jesli zniknie/zmniejszy sie wyraznie, to wiatr byl glownym powodem.
+    valid_cr_wind = [r for r in out_rows if not np.isnan(r["crossrange_err_adjusted_wind_m"])]
+    if valid_cr_wind:
+        cr_err_w = np.array([r["crossrange_err_adjusted_wind_m"] for r in valid_cr_wind])
+        n_same_sign_w = max(np.sum(cr_err_w > 0), np.sum(cr_err_w < 0))
+        print(f"\nBlad crossrange (model_adjusted+wiatr - actual) przy apogeum na "
+              f"{len(valid_cr_wind)} lotach:")
+        print(f"  mean={np.mean(cr_err_w):+.1f}m  std={np.std(cr_err_w):.1f}m  "
+              f"[{np.min(cr_err_w):+.1f}m, {np.max(cr_err_w):+.1f}m]  "
+              f"zgodny znak: {n_same_sign_w}/{len(valid_cr_wind)} lotow")
+        if abs(np.mean(cr_err_w)) > np.std(cr_err_w) and n_same_sign_w >= 0.7 * len(valid_cr_wind):
+            print("  -> ODCHYLENIE SYSTEMATYCZNE PRZETRWALO po dolozeniu zmierzonego "
+                  "wiatru -> wiatr NIE wyjasnia crossrange, hipoteza trwalej "
+                  "niewspolosiowosci/asymetrii pozostaje aktualna.")
+        else:
+            print("  -> po dolozeniu zmierzonego wiatru odchylenie systematyczne "
+                  "zniknelo/zmniejszylo sie -> wiatr jest wystarczajacym wyjasnieniem "
+                  "crossrange, bez potrzeby trwalej niewspolosiowosci dyszy.")
+
     # ------------------------------------------------------------------
     make_comparison_figure(out_rows, "baseline", out_dir / "per_flight_6dof_baseline.png")
     make_comparison_figure(out_rows, "adjusted", out_dir / "per_flight_6dof_adjusted.png")
+    make_comparison_figure(out_rows, "adjusted_wind", out_dir / "per_flight_6dof_adjusted_wind.png")
 
 
 def make_comparison_figure(out_rows, variant, out_png):
@@ -442,7 +545,12 @@ def make_comparison_figure(out_rows, variant, out_png):
         ax.grid(alpha=0.3)
         ax.legend(fontsize=9)
 
-    nice_name = "BASELINE (usredniony profil ciagu)" if variant == "baseline" else "ADJUSTED (profil ciagu tego lotu)"
+    nice_names = {
+        "baseline": "BASELINE (usredniony profil ciagu)",
+        "adjusted": "ADJUSTED (profil ciagu tego lotu)",
+        "adjusted_wind": "ADJUSTED + ZMIERZONY WIATR (profil ciagu tego lotu + Open-Meteo gust)",
+    }
+    nice_name = nice_names.get(variant, variant)
     fig.suptitle(f"Model 6DOF vs dane polowe — {nice_name}", fontsize=13)
     plt.tight_layout()
     plt.savefig(out_png, dpi=140, bbox_inches="tight")
