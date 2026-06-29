@@ -214,8 +214,18 @@ def run_one(aero, geom, atm, gravity, launcher, mass, prop, initial_state):
     i_apo = int(np.argmax(h))
     downrange, crossrange = float(result.x[i_apo]), float(result.y[i_apo])
     rng = float(np.hypot(downrange, crossrange))
+    # Solver juz integruje balistycznie do ground_event (z>=0, core/solver6.py)
+    # -- model NIE symuluje spadochronu, wiec result.t[-1]/x[-1]/y[-1] to
+    # czysto balistyczny ("crash", bez chutu) punkt/czas upadku. Uzywane
+    # tylko jako DOLNA GRANICA czasu lotu / odniesienie balistyczne w
+    # analyze_impact_point.py -- prawdziwy lot ma chute, wiec nie jest to
+    # predykcja realnego punktu ladowania.
+    impact_downrange, impact_crossrange = float(result.x[-1]), float(result.y[-1])
+    impact_rng = float(np.hypot(impact_downrange, impact_crossrange))
+    impact_t = float(result.t[-1])
     return (float(h[i_apo]), float(np.max(result.speed)), result.status,
-            downrange, crossrange, rng)
+            downrange, crossrange, rng,
+            impact_downrange, impact_crossrange, impact_rng, impact_t)
 
 
 # --------------------------------------------------------------------------
@@ -281,25 +291,30 @@ def main():
         prop_base = build_propulsion(cfg_base)
         try:
             (h_base, v_base, status_base,
-             dr_base, cr_base, rng_base) = run_one(aero, geom, atm, gravity, launcher, mass,
-                                                    prop_base, initial_state)
+             dr_base, cr_base, rng_base,
+             idr_base, icr_base, irng_base, it_base) = run_one(
+                aero, geom, atm, gravity, launcher, mass, prop_base, initial_state)
         except Exception as e:
             h_base, v_base, status_base = float("nan"), float("nan"), f"error:{e}"
             dr_base, cr_base, rng_base = float("nan"), float("nan"), float("nan")
+            idr_base, icr_base, irng_base, it_base = (float("nan"),) * 4
 
         # Adjusted: rzeczywisty profil ciagu TEGO lotu z kalibracji Pc->T
         prop_flight = build_flight_thrust(base, r["fno"], t_ignition)
         if prop_flight is not None:
             try:
                 (h_adj, v_adj, status_adj,
-                 dr_adj, cr_adj, rng_adj) = run_one(aero, geom, atm, gravity, launcher, mass,
-                                                     prop_flight, initial_state)
+                 dr_adj, cr_adj, rng_adj,
+                 idr_adj, icr_adj, irng_adj, it_adj) = run_one(
+                    aero, geom, atm, gravity, launcher, mass, prop_flight, initial_state)
             except Exception as e:
                 h_adj, v_adj, status_adj = float("nan"), float("nan"), f"error:{e}"
                 dr_adj, cr_adj, rng_adj = float("nan"), float("nan"), float("nan")
+                idr_adj, icr_adj, irng_adj, it_adj = (float("nan"),) * 4
         else:
             h_adj, v_adj, status_adj = float("nan"), float("nan"), "no_thrust_calib"
             dr_adj, cr_adj, rng_adj = float("nan"), float("nan"), float("nan")
+            idr_adj, icr_adj, irng_adj, it_adj = (float("nan"),) * 4
 
         h_act, v_act = actual_apogee_vmax(base, r["fno"])
         dr_act, cr_act, rng_act = actual_range_at_apogee(base, r["fno"], r["azimuth"])
@@ -341,6 +356,13 @@ def main():
             downrange_apo_actual_m=dr_act, crossrange_apo_actual_m=cr_act,
             range_apo_actual_m=rng_act,
             crossrange_err_baseline_m=dcr_base, crossrange_err_adjusted_m=dcr_adj,
+            # Punkt/czas upadku BALISTYCZNY z modelu (bez chutu, patrz run_one) --
+            # odniesienie dla analyze_impact_point.py, NIE realna predykcja
+            # ladowania (prawdziwy lot ma spadochron).
+            impact_downrange_baseline_m=idr_base, impact_crossrange_baseline_m=icr_base,
+            impact_range_baseline_m=irng_base, impact_t_baseline_s=it_base,
+            impact_downrange_adjusted_m=idr_adj, impact_crossrange_adjusted_m=icr_adj,
+            impact_range_adjusted_m=irng_adj, impact_t_adjusted_s=it_adj,
         ))
 
     out_dir = Path(base) / "results"
