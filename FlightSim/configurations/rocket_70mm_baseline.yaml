@@ -8,7 +8,7 @@ name: rocket_70mm_baseline
 
 # ---- Warunki lotu dla DATCOM ----------------------------------------- #
 flight_conditions:
-  mach:  [0.3, 0.6, 0.9, 1.1, 1.4, 2.0,]   # liczby Macha
+  mach:  [0.1, 0.2, 0.3, 0.4, 0.8, 0.9, 1.0, 1.1, 2.3]   # liczby Macha
   alpha: [-10.0, -8.0, -6.0, -4.0, -2.0,   # kąty natarcia [deg]
            0.0, 2.0, 4.0, 6.0, 8.0, 10.0]
   altitude: 1000.0   # wysokość referencyjna [m] — do liczby Reynoldsa
