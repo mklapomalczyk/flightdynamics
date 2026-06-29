@@ -608,7 +608,10 @@ _PANELS_DEF = [
 def _plot_error_grid(out_rows, variant, out_png, pct: bool):
     """Wspolny rdzen dla figury bledu absolutnego (pct=False) i
     wzglednego w % (pct=True), 2x3 panele, wszystkie loty na jednym
-    wykresie per panel."""
+    wykresie per panel. Loty ze status_{variant}=='blowup' (rozbiegla
+    sie symulacja, np. status_adjusted dla lotu 14) sa wykluczone z
+    porownania -- ich bledy nie maja sensu fizycznego."""
+    out_rows = [r for r in out_rows if r.get(f"status_{variant}") != "blowup"]
     fnos = [r["fno"] for r in out_rows]
     x = np.arange(len(fnos))
     width = 0.6
