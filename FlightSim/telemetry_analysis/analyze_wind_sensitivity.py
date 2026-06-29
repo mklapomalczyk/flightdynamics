@@ -67,11 +67,14 @@ from geo.geographic import MissionConfig
 from aero import get_aero_model
 
 
+# h_apo_actual: AGL (wzgledem padu), z field_test_data/results/
+# trajectory_closure_summary.csv -> h_apo_actual_m (po poprawce ASL->AGL
+# w validate_trajectory.py — patrz tamtejszy komentarz w simulate_ascent()).
 FLIGHTS = {
     18: dict(T_C=-4.1, p_hpa=994.0, RH_pct=80.0, elevation_deg=45.0,
-             azimuth_deg=325.0, h_apo_actual=1291.3, cant_angle_deg=0.0),
+             azimuth_deg=325.0, h_apo_actual=1133.5, cant_angle_deg=0.0),
     20: dict(T_C=-4.1, p_hpa=994.0, RH_pct=77.0, elevation_deg=45.0,
-             azimuth_deg=325.0, h_apo_actual=1393.9, cant_angle_deg=0.6),
+             azimuth_deg=325.0, h_apo_actual=1228.7, cant_angle_deg=0.6),
 }
 
 WIND_SPEEDS = [2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 15.0]

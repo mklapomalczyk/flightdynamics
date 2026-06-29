@@ -168,11 +168,20 @@ def simulate_ascent(tel, cfg, cal, curves, t_max_pad=10.0):
     i_switch = int(np.argmin(np.abs(t_actual - (t_burn + 0.3))))
     V_actual = np.concatenate([V_acc[:i_switch], V_gps[i_switch:]])
 
+    # h_baro/h0/h_apo_pred sa tu nadal ASL (zakotwiczone w h0 = wysokosc GPS
+    # na padzie, patrz baro_altitude() w diag_drag.py — dla lotow bez
+    # barometru to po prostu surowa wysokosc GPS ASL). Pelny model 6DOF
+    # (core/state6.py: State6DOF.initial() -> z=0.0) liczy apogeum AGL
+    # (wzgledem padu), wiec apogeum tu raportowane (i zapisywane do CSV,
+    # uzywane przez analyze_*.py / monte_carlo_thrust.py / run_6dof_cant_*.py)
+    # musi byc tez AGL — odejmujemy h0, inaczej apogeum "rzeczywiste" wychodzi
+    # systematycznie wyzsze o wysokosc startowiska (~150-160m tutaj) niz
+    # apogeum modelu, z ktorym jest porownywane.
     return dict(
-        t_rel=sol.t, h=sol.y[0], Vh=sol.y[1], Vz=sol.y[2], V=V_pred,
-        t_apo_pred=t_apo_pred, h_apo_pred=h_apo_pred,
+        t_rel=sol.t, h=sol.y[0] - h0, Vh=sol.y[1], Vz=sol.y[2], V=V_pred,
+        t_apo_pred=t_apo_pred, h_apo_pred=h_apo_pred - h0,
         t_apo_actual=float(t[i_apo] - t[i_ign]),
-        h_apo_actual=float(h_baro[i_apo]),
+        h_apo_actual=float(h_baro[i_apo]) - h0,
         h0=h0,
         t_actual=t_actual, V_actual=V_actual,
         V_max_pred=float(np.max(V_pred)), V_max_actual=float(np.nanmax(V_actual)),
