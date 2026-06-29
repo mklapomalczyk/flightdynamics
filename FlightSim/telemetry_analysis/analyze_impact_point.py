@@ -56,7 +56,7 @@ from telemetry_parser import get_data_dir, parse_telemetry, resolve_data_file
 from imu_reconstruction import detect_ignition, G0
 from diag_drag import detect_events, smooth_gps_derivative
 from gps_fusion import latlon_to_enu
-from analyze_per_flight_6dof import read_flights, downrange_crossrange
+from analyze_per_flight_6dof import read_flights, downrange_crossrange, actual_apogee_vmax
 from analyze_wind_sensitivity import read_measured_wind
 
 DEFAULT_WIND_GUST_MPS = 15.0   # gdy brak launch_weather_openmeteo.csv dla lotu
@@ -115,9 +115,14 @@ def gps_quality_near(tel, idx, n_check=5):
 
 # --------------------------------------------------------------------------
 def load_model_impact(base, fno):
-    """Czyta balistyczny (bez chutu) punkt/czas upadku z modelu 6DOF z
-    per_flight_6dof_per_nose.csv (analyze_per_flight_6dof.py), jesli
-    istnieje (wymaga DATCOM -> wygenerowane lokalnie). Zwraca None jesli
+    """Czyta z per_flight_6dof_per_nose.csv (analyze_per_flight_6dof.py,
+    wymaga DATCOM -> lokalnie/Windows) wszystkie wielkosci modelu 6DOF
+    (silnik 'adjusted' = rzeczywisty profil ciagu tego lotu) potrzebne do
+    pelnego porownania z danymi polowymi: apogeum, V_max, downrange/
+    crossrange przy apogeum, oraz BALISTYCZNY (bez chutu) punkt/czas/
+    predkosc upadku (= koniec calkowania solvera, ground_event z>=0 --
+    NIE jest to przewidywanie realnego ladowania pod spadochronem, tylko
+    odniesienie/dolna granica zasiegu i czasu lotu). Zwraca None jesli
     plik/wiersz nie istnieje."""
     csv_path = Path(base) / "results" / "per_flight_6dof_per_nose.csv"
     if not csv_path.exists():
@@ -127,8 +132,16 @@ def load_model_impact(base, fno):
             if int(row["fno"]) == fno:
                 try:
                     return dict(
+                        h_apo_m=float(row["h_apo_pred_adjusted"]),
+                        v_max_mps=float(row["v_max_pred_adjusted"]),
+                        downrange_apo_m=float(row["downrange_apo_pred_adjusted_m"]),
+                        crossrange_apo_m=float(row["crossrange_apo_pred_adjusted_m"]),
+                        range_apo_m=float(row["range_apo_pred_adjusted_m"]),
+                        downrange_impact_m=float(row["impact_downrange_adjusted_m"]),
+                        crossrange_impact_m=float(row["impact_crossrange_adjusted_m"]),
                         rng_m=float(row["impact_range_adjusted_m"]),
                         t_s=float(row["impact_t_adjusted_s"]),
+                        speed_impact_mps=float(row["impact_speed_adjusted_mps"]),
                     )
                 except (ValueError, KeyError):
                     return None
@@ -185,6 +198,15 @@ def process_flight(base, r):
 
     gps_q = gps_quality_near(tel, i_end)
 
+    # Predkosc calkowita (horyzontalna+wertykalna) w ostatniej znanej probce
+    # (i_end) -- "predkosc przy uderzeniu" w sensie uzytkownika = predkosc w
+    # ostatniej znanej pozycji, NIE przy realnym ladowaniu (patrz docstring
+    # modulu / gps_quality_at_landing: GPS tu zwykle juz nieaktualne).
+    Vh_land = horizontal_speed_at(tel, e, n, i_end)
+    speed_impact_actual = float(np.hypot(Vh_land, v_descent)) if np.isfinite(v_descent) else float(Vh_land)
+
+    h_apo_act, v_max_act = actual_apogee_vmax(base, fno)
+
     model = load_model_impact(base, fno)
 
     return dict(
@@ -199,8 +221,18 @@ def process_flight(base, r):
         energy_plausible=energy_ok,
         descent_rate_mps=v_descent, descent_class=descent_class,
         gps_quality_at_landing=gps_q,
+        v_max_actual_mps=(v_max_act if v_max_act is not None else float("nan")),
+        speed_at_impact_actual_mps=speed_impact_actual,
+        h_apo_model_m=(model["h_apo_m"] if model else float("nan")),
+        v_max_model_mps=(model["v_max_mps"] if model else float("nan")),
+        downrange_apo_model_m=(model["downrange_apo_m"] if model else float("nan")),
+        crossrange_apo_model_m=(model["crossrange_apo_m"] if model else float("nan")),
+        range_apo_model_m=(model["range_apo_m"] if model else float("nan")),
+        downrange_impact_model_m=(model["downrange_impact_m"] if model else float("nan")),
+        crossrange_impact_model_m=(model["crossrange_impact_m"] if model else float("nan")),
         model_impact_range_m=(model["rng_m"] if model else float("nan")),
         model_impact_t_s=(model["t_s"] if model else float("nan")),
+        speed_at_impact_model_mps=(model["speed_impact_mps"] if model else float("nan")),
     )
 
 
@@ -236,6 +268,36 @@ def main():
         if not np.isnan(res["model_impact_range_m"]):
             print(f"      [model balistyczny bez chutu: zasieg={res['model_impact_range_m']:.1f}m "
                   f"t={res['model_impact_t_s']:.2f}s -- TYLKO odniesienie, nie ma chutu]")
+
+    has_model = any(not np.isnan(res["h_apo_model_m"]) for res in out_rows)
+    if has_model:
+        print("\n--- Porownanie aktualny lot (GPS) vs model 6DOF (silnik 'adjusted') ---")
+        print("    'impact' = ostatnia znana pozycja/predkosc (aktualny: ostatnia probka "
+              "telemetrii, model: koniec calkowania balistycznego bez chutu -- NIE jest to "
+              "ten sam fizyczny moment, porownanie orientacyjne, patrz docstring modulu)")
+        print(f"{'lot':>4} {'h_apo_act':>9} {'h_apo_mod':>9} {'dh%':>6}  "
+              f"{'Vmax_act':>8} {'Vmax_mod':>8} {'dV%':>6}  "
+              f"{'dr_apo_a':>8} {'dr_apo_m':>8} {'cr_apo_a':>8} {'cr_apo_m':>8}  "
+              f"{'dr_imp_a':>8} {'dr_imp_m':>8} {'cr_imp_a':>8} {'cr_imp_m':>8}  "
+              f"{'rng_imp_a':>9} {'rng_imp_m':>9}  {'Vimp_act':>8} {'Vimp_mod':>8}")
+        for res in out_rows:
+            if np.isnan(res["h_apo_model_m"]):
+                print(f"{res['fno']:4d}  -- brak modelu (uruchom analyze_per_flight_6dof.py lokalnie z DATCOM) --")
+                continue
+            dh = 100.0 * (res["h_apo_model_m"] - res["h_apo_agl_m"]) / res["h_apo_agl_m"]
+            dv = (100.0 * (res["v_max_model_mps"] - res["v_max_actual_mps"]) / res["v_max_actual_mps"]
+                  if np.isfinite(res["v_max_actual_mps"]) and res["v_max_actual_mps"] else float("nan"))
+            print(f"{res['fno']:4d} {res['h_apo_agl_m']:9.1f} {res['h_apo_model_m']:9.1f} {dh:+6.1f}  "
+                  f"{res['v_max_actual_mps']:8.1f} {res['v_max_model_mps']:8.1f} {dv:+6.1f}  "
+                  f"{res['downrange_apo_m']:8.1f} {res['downrange_apo_model_m']:8.1f} "
+                  f"{res['crossrange_apo_m']:+8.1f} {res['crossrange_apo_model_m']:+8.1f}  "
+                  f"{res['downrange_land_m']:8.1f} {res['downrange_impact_model_m']:8.1f} "
+                  f"{res['crossrange_land_m']:+8.1f} {res['crossrange_impact_model_m']:+8.1f}  "
+                  f"{res['range_land_m']:9.1f} {res['model_impact_range_m']:9.1f}  "
+                  f"{res['speed_at_impact_actual_mps']:8.1f} {res['speed_at_impact_model_mps']:8.1f}")
+    else:
+        print("\n[brak per_flight_6dof_per_nose.csv -- uruchom analyze_per_flight_6dof.py "
+              "lokalnie (wymaga DATCOM) zeby uzyskac porownanie z modelem]")
 
     if not out_rows:
         print("Brak wynikow.")

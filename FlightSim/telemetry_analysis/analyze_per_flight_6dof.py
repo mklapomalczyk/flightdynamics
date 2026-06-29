@@ -223,9 +223,10 @@ def run_one(aero, geom, atm, gravity, launcher, mass, prop, initial_state):
     impact_downrange, impact_crossrange = float(result.x[-1]), float(result.y[-1])
     impact_rng = float(np.hypot(impact_downrange, impact_crossrange))
     impact_t = float(result.t[-1])
+    impact_speed = float(result.speed[-1])
     return (float(h[i_apo]), float(np.max(result.speed)), result.status,
             downrange, crossrange, rng,
-            impact_downrange, impact_crossrange, impact_rng, impact_t)
+            impact_downrange, impact_crossrange, impact_rng, impact_t, impact_speed)
 
 
 # --------------------------------------------------------------------------
@@ -292,12 +293,12 @@ def main():
         try:
             (h_base, v_base, status_base,
              dr_base, cr_base, rng_base,
-             idr_base, icr_base, irng_base, it_base) = run_one(
+             idr_base, icr_base, irng_base, it_base, isp_base) = run_one(
                 aero, geom, atm, gravity, launcher, mass, prop_base, initial_state)
         except Exception as e:
             h_base, v_base, status_base = float("nan"), float("nan"), f"error:{e}"
             dr_base, cr_base, rng_base = float("nan"), float("nan"), float("nan")
-            idr_base, icr_base, irng_base, it_base = (float("nan"),) * 4
+            idr_base, icr_base, irng_base, it_base, isp_base = (float("nan"),) * 5
 
         # Adjusted: rzeczywisty profil ciagu TEGO lotu z kalibracji Pc->T
         prop_flight = build_flight_thrust(base, r["fno"], t_ignition)
@@ -305,16 +306,16 @@ def main():
             try:
                 (h_adj, v_adj, status_adj,
                  dr_adj, cr_adj, rng_adj,
-                 idr_adj, icr_adj, irng_adj, it_adj) = run_one(
+                 idr_adj, icr_adj, irng_adj, it_adj, isp_adj) = run_one(
                     aero, geom, atm, gravity, launcher, mass, prop_flight, initial_state)
             except Exception as e:
                 h_adj, v_adj, status_adj = float("nan"), float("nan"), f"error:{e}"
                 dr_adj, cr_adj, rng_adj = float("nan"), float("nan"), float("nan")
-                idr_adj, icr_adj, irng_adj, it_adj = (float("nan"),) * 4
+                idr_adj, icr_adj, irng_adj, it_adj, isp_adj = (float("nan"),) * 5
         else:
             h_adj, v_adj, status_adj = float("nan"), float("nan"), "no_thrust_calib"
             dr_adj, cr_adj, rng_adj = float("nan"), float("nan"), float("nan")
-            idr_adj, icr_adj, irng_adj, it_adj = (float("nan"),) * 4
+            idr_adj, icr_adj, irng_adj, it_adj, isp_adj = (float("nan"),) * 5
 
         h_act, v_act = actual_apogee_vmax(base, r["fno"])
         dr_act, cr_act, rng_act = actual_range_at_apogee(base, r["fno"], r["azimuth"])
@@ -361,8 +362,10 @@ def main():
             # ladowania (prawdziwy lot ma spadochron).
             impact_downrange_baseline_m=idr_base, impact_crossrange_baseline_m=icr_base,
             impact_range_baseline_m=irng_base, impact_t_baseline_s=it_base,
+            impact_speed_baseline_mps=isp_base,
             impact_downrange_adjusted_m=idr_adj, impact_crossrange_adjusted_m=icr_adj,
             impact_range_adjusted_m=irng_adj, impact_t_adjusted_s=it_adj,
+            impact_speed_adjusted_mps=isp_adj,
         ))
 
     out_dir = Path(base) / "results"
