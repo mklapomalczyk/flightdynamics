@@ -31,6 +31,22 @@ pelnych wynikow. W kontenerze mozna jedynie sprawdzic logike skryptu z
 fizycznie poprawne tylko dla lotow, ktorych cant_angle juz odpowiada
 YAML).
 
+Oprocz apogeum/V_max raportowany jest tez zasieg poziomy przy apogeum
+(downrange/crossrange wzgledem azymutu strzalu, Launch Frame: X=downrange,
+Y=crossrange w prawo) — PRZED rozwarciem spadochronu, wiec porownywalny
+1:1 z modelem 6DOF (ktory spadochronu nie symuluje; ladowanie pod
+spadochronem zalezy od wiatru podczas znoszenia i NIE jest tu uzywane
+do walidacji). Actual: GPS w momencie tego samego i_apo co
+trajectory_closure_summary.csv (argmax surowej wysokosci GPS), wzgledem
+pierwszego probek GPS przed zaplonem (x=y=0 w modelu). Cel: sprawdzic
+hipoteze trwalej niewspolosiowosci dyszy silnika — sygnatura to
+SYSTEMATYCZNE odchylenie crossrange w jedna strone na wiekszosci lotow
+(mean >> std), w odroznieniu od wiatru/szumu GPS (odchylenia w obie
+strony, mean ~ 0). h_apo_actual_m uzyty tu pochodzi z
+trajectory_closure_summary.csv i jest juz AGL (wzgledem padu) po
+poprawce w validate_trajectory.py — wczesniej byl ASL (zawieral
+wysokosc startowiska), co dawalo zanizony "deficyt do wyjasnienia".
+
 Uzycie (lokalnie, z prawdziwym DATCOM):
     python analyze_per_flight_6dof.py
     python analyze_per_flight_6dof.py --case-ostra rocket_70mm_baseline --case-tepa rocket_70mm_baseline_tepa
@@ -51,7 +67,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from telemetry_parser import get_data_dir
+from telemetry_parser import get_data_dir, parse_telemetry, resolve_data_file
 from run_6dof_cant_montecarlo import get_aero_for_cant
 from datcom_io.config_reader import load_config
 from datcom_io.rocket_builder import build_propulsion, build_geometry, ThrustProfile, PropulsionConfig6DOFDynamic
@@ -62,6 +78,9 @@ from models.launcher import LauncherConfig
 from forces.force_model6 import ForceModel6DOF
 from core.solver6 import run_simulation_6dof
 from core.state6 import State6DOF
+from imu_reconstruction import detect_ignition
+from diag_drag import detect_events
+from gps_fusion import latlon_to_enu
 
 
 # --------------------------------------------------------------------------
@@ -131,6 +150,36 @@ def actual_apogee_vmax(base, fno):
     return None, None
 
 
+def downrange_crossrange(e, n, azimuth_deg):
+    """Rzutuje przesuniecie ENU (e=East, n=North) na Launch Frame osi
+    strzalu: downrange wzdluz azymutu, crossrange w prawo od azymutu
+    (ta sama konwencja co core/state6.py: X wzdluz azymutu, Y w prawo)."""
+    az = np.radians(azimuth_deg)
+    downrange = e * np.sin(az) + n * np.cos(az)
+    crossrange = e * np.cos(az) - n * np.sin(az)
+    return downrange, crossrange
+
+
+def actual_range_at_apogee(base, fno, azimuth_deg):
+    """Przesuniecie poziome (downrange/crossrange wzgledem azymutu strzalu,
+    Launch Frame) w momencie GPS-apogeum (ten sam indeks i_apo co
+    validate_trajectory.py/trajectory_closure_summary.csv: argmax surowej
+    wysokosci GPS) — PRZED rozwarciem spadochronu, wiec porownywalne z
+    modelem 6DOF (ktory nie symuluje spadochronu). Referencja pozycji =
+    pierwszy probek GPS przed zaplonem (tam gdzie x=y=0 w modelu)."""
+    fpath = resolve_data_file(f"ARTEMIDA_{fno}_LOT.txt")
+    if not fpath.exists():
+        return None, None, None
+    tel = parse_telemetry(fpath, verbose=False)
+    t_ign_abs = detect_ignition(tel)
+    i_ign, _, i_apo, _ = detect_events(tel, t_ign_abs)
+    lat0, lon0 = tel.lat[i_ign], tel.lon[i_ign]
+    e, n = latlon_to_enu(tel.lat[[i_apo]], tel.lon[[i_apo]], lat0, lon0)
+    downrange, crossrange = downrange_crossrange(e[0], n[0], azimuth_deg)
+    rng = float(np.hypot(downrange, crossrange))
+    return float(downrange), float(crossrange), rng
+
+
 # --------------------------------------------------------------------------
 def build_scaled_mass(cfg, t_ignition, m_rocket_flight):
     """Skaluje mass_model.full/empty proporcjonalnie do m_rocket_flight,
@@ -163,7 +212,10 @@ def run_one(aero, geom, atm, gravity, launcher, mass, prop, initial_state):
                                   rtol=1e-6, atol=1e-8, max_step=0.05)
     h = -result.z
     i_apo = int(np.argmax(h))
-    return float(h[i_apo]), float(np.max(result.speed)), result.status
+    downrange, crossrange = float(result.x[i_apo]), float(result.y[i_apo])
+    rng = float(np.hypot(downrange, crossrange))
+    return (float(h[i_apo]), float(np.max(result.speed)), result.status,
+            downrange, crossrange, rng)
 
 
 # --------------------------------------------------------------------------
@@ -203,7 +255,12 @@ def main():
 
     print(f"{'lot':>4} {'nos':>6} {'cant':>5} {'m_kg':>6} {'el':>5} {'az':>5} {'T[C]':>6} "
           f"{'h_base':>8} {'h_adj':>8} {'h_act':>8} {'dh_base[%]':>11} {'dh_adj[%]':>10} "
-          f"{'V_base':>7} {'V_adj':>7} {'V_act':>7} {'dV_base[%]':>11} {'dV_adj[%]':>10}")
+          f"{'V_base':>7} {'V_adj':>7} {'V_act':>7} {'dV_base[%]':>11} {'dV_adj[%]':>10} "
+          f"{'rng_base':>8} {'rng_adj':>8} {'rng_act':>8} "
+          f"{'cr_base':>7} {'cr_adj':>7} {'cr_act':>7}")
+    print("(rng/cr = downrange-distance/crossrange [m] przy apogeum, PRZED "
+          "spadochronem -> porownywalne z modelem 6DOF. cr != 0 systematycznie "
+          "w jedna strone na wielu lotach = mozliwa niewspolosiowosc dyszy.)")
 
     out_rows = []
     for r in flights:
@@ -223,32 +280,50 @@ def main():
         # Baseline: usredniony profil ciagu z YAML (ten sam dla wszystkich lotow)
         prop_base = build_propulsion(cfg_base)
         try:
-            h_base, v_base, status_base = run_one(aero, geom, atm, gravity, launcher, mass, prop_base, initial_state)
+            (h_base, v_base, status_base,
+             dr_base, cr_base, rng_base) = run_one(aero, geom, atm, gravity, launcher, mass,
+                                                    prop_base, initial_state)
         except Exception as e:
             h_base, v_base, status_base = float("nan"), float("nan"), f"error:{e}"
+            dr_base, cr_base, rng_base = float("nan"), float("nan"), float("nan")
 
         # Adjusted: rzeczywisty profil ciagu TEGO lotu z kalibracji Pc->T
         prop_flight = build_flight_thrust(base, r["fno"], t_ignition)
         if prop_flight is not None:
             try:
-                h_adj, v_adj, status_adj = run_one(aero, geom, atm, gravity, launcher, mass, prop_flight, initial_state)
+                (h_adj, v_adj, status_adj,
+                 dr_adj, cr_adj, rng_adj) = run_one(aero, geom, atm, gravity, launcher, mass,
+                                                     prop_flight, initial_state)
             except Exception as e:
                 h_adj, v_adj, status_adj = float("nan"), float("nan"), f"error:{e}"
+                dr_adj, cr_adj, rng_adj = float("nan"), float("nan"), float("nan")
         else:
             h_adj, v_adj, status_adj = float("nan"), float("nan"), "no_thrust_calib"
+            dr_adj, cr_adj, rng_adj = float("nan"), float("nan"), float("nan")
 
         h_act, v_act = actual_apogee_vmax(base, r["fno"])
+        dr_act, cr_act, rng_act = actual_range_at_apogee(base, r["fno"], r["azimuth"])
+
         dh_base = 100.0 * (h_base - h_act) / h_act if h_act else float("nan")
         dh_adj = 100.0 * (h_adj - h_act) / h_act if (h_act and not np.isnan(h_adj)) else float("nan")
         dv_base = 100.0 * (v_base - v_act) / v_act if (v_act is not None) else float("nan")
         dv_adj = 100.0 * (v_adj - v_act) / v_act if (v_act is not None and not np.isnan(v_adj)) else float("nan")
+        # crossrange: bezwzgledne odchylenie [m] (a nie %) -- bliska 0 wartosc
+        # rzeczywista robi % bezsensownym/niestabilnym numerycznie. Stale
+        # odchylenie w jedna strone na wielu lotach = podpis niewspolosiowosci
+        # dyszy (lub trwale przesuniecie xcg/asymetria plotek), w odroznieniu
+        # od wiatru/turbulencji, ktore daja odchylenia w obie strony.
+        dcr_base = (cr_base - cr_act) if (cr_act is not None and not np.isnan(cr_base)) else float("nan")
+        dcr_adj = (cr_adj - cr_act) if (cr_act is not None and not np.isnan(cr_adj)) else float("nan")
 
         print(f"{r['fno']:4d} {r['nose']:>6} {r['cant']:5.2f} {r['m_rocket']:6.2f} "
               f"{r['elevation']:5.1f} {r['azimuth']:5.1f} {r['T_C']:6.1f} "
               f"{h_base:8.1f} {h_adj:8.1f} {h_act if h_act else float('nan'):8.1f} "
               f"{dh_base:+11.2f} {dh_adj:+10.2f} "
               f"{v_base:7.1f} {v_adj:7.1f} {v_act if v_act else float('nan'):7.1f} "
-              f"{dv_base:+11.2f} {dv_adj:+10.2f}")
+              f"{dv_base:+11.2f} {dv_adj:+10.2f} "
+              f"{rng_base:7.1f} {rng_adj:7.1f} {rng_act if rng_act else float('nan'):7.1f} "
+              f"{cr_base:+7.1f} {cr_adj:+7.1f} {cr_act if cr_act else float('nan'):+7.1f}")
 
         out_rows.append(dict(
             fno=r["fno"], nose=r["nose"], cant=r["cant"], m_rocket=r["m_rocket"],
@@ -259,6 +334,13 @@ def main():
             h_apo_actual=h_act, v_max_actual=v_act,
             dh_pct_baseline=dh_base, dv_pct_baseline=dv_base,
             dh_pct_adjusted=dh_adj, dv_pct_adjusted=dv_adj,
+            downrange_apo_pred_baseline_m=dr_base, crossrange_apo_pred_baseline_m=cr_base,
+            range_apo_pred_baseline_m=rng_base,
+            downrange_apo_pred_adjusted_m=dr_adj, crossrange_apo_pred_adjusted_m=cr_adj,
+            range_apo_pred_adjusted_m=rng_adj,
+            downrange_apo_actual_m=dr_act, crossrange_apo_actual_m=cr_act,
+            range_apo_actual_m=rng_act,
+            crossrange_err_baseline_m=dcr_base, crossrange_err_adjusted_m=dcr_adj,
         ))
 
     out_dir = Path(base) / "results"
@@ -283,6 +365,28 @@ def main():
         print(f"\nBias apogeum ADJUSTED (rzeczywisty silnik tego lotu) na {len(valid_adj)} lotach:")
         print(f"  dh_apo: mean={np.mean(dh_adj_all):+.2f}%  std={np.std(dh_adj_all):.2f}%  "
               f"[{np.min(dh_adj_all):+.2f}%, {np.max(dh_adj_all):+.2f}%]")
+
+    # Crossrange (odchylenie boczne od azymutu strzalu przy apogeum, model
+    # vs GPS): test niewspolosiowosci dyszy. Wiatr/turbulencja daje odchylenia
+    # w obie strony (mean ~ 0, std duze); trwala niewspolosiowosc dyszy daje
+    # odchylenie SYSTEMATYCZNE (mean wyraznie != 0, w jedna strone na
+    # WIEKSZOSCI lotow, niezaleznie od azymutu/dnia/warunkow).
+    valid_cr = [r for r in out_rows if not np.isnan(r["crossrange_err_adjusted_m"])]
+    if valid_cr:
+        cr_err = np.array([r["crossrange_err_adjusted_m"] for r in valid_cr])
+        n_same_sign = max(np.sum(cr_err > 0), np.sum(cr_err < 0))
+        print(f"\nBlad crossrange (model_adjusted - actual) przy apogeum na {len(valid_cr)} lotach:")
+        print(f"  mean={np.mean(cr_err):+.1f}m  std={np.std(cr_err):.1f}m  "
+              f"[{np.min(cr_err):+.1f}m, {np.max(cr_err):+.1f}m]  "
+              f"zgodny znak: {n_same_sign}/{len(valid_cr)} lotow")
+        if abs(np.mean(cr_err)) > np.std(cr_err) and n_same_sign >= 0.7 * len(valid_cr):
+            print("  -> ODCHYLENIE SYSTEMATYCZNE (mean >> std, zgodny znak na "
+                  "wiekszosci lotow): zgodne z trwala niewspolosiowoscia dyszy "
+                  "lub asymetria geometrii, NIE z wiatrem/szumem GPS.")
+        else:
+            print("  -> brak wyraznego systematycznego odchylenia (znak/wielkosc "
+                  "niestabilne miedzy lotami) -> bardziej zgodne z wiatrem/szumem "
+                  "GPS niz z trwala niewspolosiowoscia dyszy.")
 
     # ------------------------------------------------------------------
     fig, ax = plt.subplots(figsize=(12, 6))
