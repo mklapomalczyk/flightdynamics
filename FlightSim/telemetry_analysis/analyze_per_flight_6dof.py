@@ -264,14 +264,8 @@ def main():
     print(f"case per nos: {case_by_nose}")
     print(f"cant_angle w YAML: {cant_yaml_by_nose}  (loty o innym cant_angle wymagaja DATCOM)\n")
 
-    print(f"{'lot':>4} {'nos':>6} {'cant':>5} {'m_kg':>6} {'el':>5} {'az':>5} {'T[C]':>6} "
-          f"{'h_base':>8} {'h_adj':>8} {'h_act':>8} {'dh_base[%]':>11} {'dh_adj[%]':>10} "
-          f"{'V_base':>7} {'V_adj':>7} {'V_act':>7} {'dV_base[%]':>11} {'dV_adj[%]':>10} "
-          f"{'rng_base':>8} {'rng_adj':>8} {'rng_act':>8} "
-          f"{'cr_base':>7} {'cr_adj':>7} {'cr_act':>7}")
-    print("(rng/cr = downrange-distance/crossrange [m] przy apogeum, PRZED "
-          "spadochronem -> porownywalne z modelem 6DOF. cr != 0 systematycznie "
-          "w jedna strone na wielu lotach = mozliwa niewspolosiowosc dyszy.)")
+    print("Pelna tabela liczbowa -> CSV (per_flight_6dof_per_nose.csv); "
+          "porownanie graficzne -> PNG (baseline/adjusted).")
 
     out_rows = []
     for r in flights:
@@ -332,14 +326,8 @@ def main():
         dcr_base = (cr_base - cr_act) if (cr_act is not None and not np.isnan(cr_base)) else float("nan")
         dcr_adj = (cr_adj - cr_act) if (cr_act is not None and not np.isnan(cr_adj)) else float("nan")
 
-        print(f"{r['fno']:4d} {r['nose']:>6} {r['cant']:5.2f} {r['m_rocket']:6.2f} "
-              f"{r['elevation']:5.1f} {r['azimuth']:5.1f} {r['T_C']:6.1f} "
-              f"{h_base:8.1f} {h_adj:8.1f} {h_act if h_act else float('nan'):8.1f} "
-              f"{dh_base:+11.2f} {dh_adj:+10.2f} "
-              f"{v_base:7.1f} {v_adj:7.1f} {v_act if v_act else float('nan'):7.1f} "
-              f"{dv_base:+11.2f} {dv_adj:+10.2f} "
-              f"{rng_base:7.1f} {rng_adj:7.1f} {rng_act if rng_act else float('nan'):7.1f} "
-              f"{cr_base:+7.1f} {cr_adj:+7.1f} {cr_act if cr_act else float('nan'):+7.1f}")
+        print(f"  lot {r['fno']:3d} ({r['nose']}, cant={r['cant']:.2f} deg): "
+              f"status baseline={status_base}  adjusted={status_adj}")
 
         out_rows.append(dict(
             fno=r["fno"], nose=r["nose"], cant=r["cant"], m_rocket=r["m_rocket"],
@@ -414,25 +402,49 @@ def main():
                   "GPS niz z trwala niewspolosiowoscia dyszy.")
 
     # ------------------------------------------------------------------
-    fig, ax = plt.subplots(figsize=(12, 6))
+    make_comparison_figure(out_rows, "baseline", out_dir / "per_flight_6dof_baseline.png")
+    make_comparison_figure(out_rows, "adjusted", out_dir / "per_flight_6dof_adjusted.png")
+
+
+def make_comparison_figure(out_rows, variant, out_png):
+    """Jedna figura (4 panele) pred vs actual dla danego wariantu silnika
+    ('baseline'=usredniony profil ciagu z YAML, 'adjusted'=rzeczywisty
+    profil ciagu tego lotu): apogeum, V_max, downrange@apogeum,
+    crossrange@apogeum -- wszystkie loty na jednym wykresie per panel."""
     fnos = [r["fno"] for r in out_rows]
-    dh_base = [r["dh_pct_baseline"] for r in out_rows]
-    dh_adj = [r["dh_pct_adjusted"] for r in out_rows]
     x = np.arange(len(fnos))
     width = 0.38
-    ax.bar(x - width / 2, dh_base, width, color="tab:gray", alpha=0.8, label="baseline (usredniony silnik)")
-    ax.bar(x + width / 2, dh_adj, width, color="tab:green", alpha=0.8, label="adjusted (silnik tego lotu)")
-    ax.axhline(0.0, color="k", lw=0.8)
-    ax.set_xticks(x)
-    ax.set_xticklabels([str(f) for f in fnos])
-    ax.set_xlabel("Lot")
-    ax.set_ylabel("Δ apogeum (pred vs actual) [%]")
-    ax.set_title("Per-lot bias apogeum: baseline vs adjusted (silnik tego lotu) — "
-                 "baseline geometrii per ksztalt nosa")
-    ax.grid(alpha=0.3)
-    ax.legend(fontsize=9)
+
+    h_pred = [r[f"h_apo_pred_{variant}"] for r in out_rows]
+    h_act = [r["h_apo_actual"] if r["h_apo_actual"] else float("nan") for r in out_rows]
+    v_pred = [r[f"v_max_pred_{variant}"] for r in out_rows]
+    v_act = [r["v_max_actual"] if r["v_max_actual"] else float("nan") for r in out_rows]
+    dr_pred = [r[f"downrange_apo_pred_{variant}_m"] for r in out_rows]
+    dr_act = [r["downrange_apo_actual_m"] if r["downrange_apo_actual_m"] else float("nan") for r in out_rows]
+    cr_pred = [r[f"crossrange_apo_pred_{variant}_m"] for r in out_rows]
+    cr_act = [r["crossrange_apo_actual_m"] if r["crossrange_apo_actual_m"] else float("nan") for r in out_rows]
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+    panels = [
+        (axes[0, 0], h_pred, h_act, "Apogeum [m AGL]"),
+        (axes[0, 1], v_pred, v_act, "V_max [m/s]"),
+        (axes[1, 0], dr_pred, dr_act, "Downrange @ apogeum [m]"),
+        (axes[1, 1], cr_pred, cr_act, "Crossrange @ apogeum [m]"),
+    ]
+    for ax, pred, act, label in panels:
+        ax.bar(x - width / 2, pred, width, color="tab:blue", alpha=0.8, label="model")
+        ax.bar(x + width / 2, act, width, color="tab:orange", alpha=0.8, label="actual (GPS)")
+        ax.axhline(0.0, color="k", lw=0.8)
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(f) for f in fnos])
+        ax.set_xlabel("Lot")
+        ax.set_ylabel(label)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=9)
+
+    nice_name = "BASELINE (usredniony profil ciagu)" if variant == "baseline" else "ADJUSTED (profil ciagu tego lotu)"
+    fig.suptitle(f"Model 6DOF vs dane polowe — {nice_name}", fontsize=13)
     plt.tight_layout()
-    out_png = out_dir / "per_flight_6dof_per_nose.png"
     plt.savefig(out_png, dpi=140, bbox_inches="tight")
     plt.close()
     print(f"Zapisano: {out_png}")
