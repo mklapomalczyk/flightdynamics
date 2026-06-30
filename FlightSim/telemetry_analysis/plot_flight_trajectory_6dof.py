@@ -46,6 +46,7 @@ from gps_fusion import latlon_to_enu
 
 from analyze_per_flight_6dof import (
     read_flights, build_flight_thrust, build_scaled_mass, downrange_crossrange,
+    build_flight_wind,
 )
 
 
@@ -93,10 +94,11 @@ def actual_time_series(base, fno, azimuth_deg, t_burn, elev_deg):
                 t_apo=t[i_apo] - t[i_ign], h_apo=h_baro[i_apo] - h0)
 
 
-def model_time_series(aero, geom, atm, gravity, launcher, mass, prop, initial_state):
+def model_time_series(aero, geom, atm, gravity, launcher, mass, prop, initial_state, wind_model=None):
     force_model = ForceModel6DOF(
         atmosphere=atm, mass_model=mass, aero_model=aero,
         gravity=gravity, geometry=geom, propulsion=prop, launcher=launcher,
+        wind_model=wind_model,
     )
     result = run_simulation_6dof(force_model, initial_state, t_max=100, dt_output=0.02,
                                   rtol=1e-6, atol=1e-8, max_step=0.05)
@@ -133,8 +135,8 @@ def plot_flight(fno, model, actual, out_png):
     ax.set_xlabel("czas od zaplonu [s]"); ax.set_ylabel("predkosc [m/s]")
     ax.set_title("Predkosc(t)"); ax.legend(fontsize=8); ax.grid(alpha=0.3)
 
-    fig.suptitle(f"Lot {fno}: model 6DOF (adjusted, profil ciagu tego lotu) vs dane polowe "
-                 f"(status modelu: {model['status']})", fontsize=12)
+    fig.suptitle(f"Lot {fno}: model 6DOF (adjusted+wiatr, profil ciagu tego lotu + zmierzony "
+                 f"wiatr Open-Meteo) vs dane polowe (status modelu: {model['status']})", fontsize=12)
     plt.tight_layout()
     plt.savefig(out_png, dpi=140, bbox_inches="tight")
     plt.close()
@@ -188,7 +190,13 @@ def main():
             print(f"Lot {fno}: brak thrust_flight_{fno}.csv (kalibracja ciagu) -- pomijam.")
             continue
 
-        model = model_time_series(aero, geom, atm, gravity, launcher, mass, prop_flight, initial_state)
+        wind = build_flight_wind(base, fno, r["azimuth"])
+        if wind is None:
+            print(f"Lot {fno}: brak zmierzonego wiatru (Open-Meteo) -- pomijam.")
+            continue
+
+        model = model_time_series(aero, geom, atm, gravity, launcher, mass, prop_flight, initial_state,
+                                   wind_model=wind)
         actual = actual_time_series(base, fno, r["azimuth"], t_burn, r["elevation"])
 
         plot_flight(fno, model, actual, out_dir / f"trajectory_6dof_flight_{fno}.png")
