@@ -329,6 +329,14 @@ def main():
     parser.add_argument("--roll-resonance-no-wind", action="store_true",
                          help="z --roll-resonance-check: pomija wiatr, zeby izolowac efekt "
                               "rezonansu roll/pitch-yaw od wymuszenia podmuchem")
+    parser.add_argument("--gust-period-s", type=float, default=GUST_PERIOD_S,
+                         help="okres podmuchu [s] dla normalnego wykresu trajektorii "
+                              "(domyslnie GUST_PERIOD_S) -- do wyboru konkretnej "
+                              "nie-tumblujacej kombinacji ze sweepu, do porownania z "
+                              "danymi polowymi")
+    parser.add_argument("--gust-phase-deg", type=float, default=math.degrees(GUST_PHASE_RAD),
+                         help="faza podmuchu [deg] dla normalnego wykresu trajektorii "
+                              "(domyslnie GUST_PHASE_RAD)")
     args = parser.parse_args()
 
     base = get_data_dir()
@@ -419,7 +427,9 @@ def main():
                                      out_dir / f"roll_yaw_resonance_flight_{fno}{suffix}.png")
             continue
 
-        wind = build_wind(base, fno, r["azimuth"])
+        wind = build_wind(base, fno, r["azimuth"],
+                           gust_period_s=args.gust_period_s,
+                           gust_phase_rad=math.radians(args.gust_phase_deg))
         if wind is None:
             print(f"Lot {fno}: brak zmierzonego wiatru (Open-Meteo) -- pomijam.")
             continue
@@ -428,7 +438,10 @@ def main():
                                    wind_model=wind)
         actual = actual_time_series(base, fno, r["azimuth"], t_burn, r["elevation"])
 
-        plot_flight(fno, model, actual, out_dir / f"trajectory_6dof_flight_{fno}.png")
+        suffix = ""
+        if args.gust_period_s != GUST_PERIOD_S or args.gust_phase_deg != math.degrees(GUST_PHASE_RAD):
+            suffix = f"_T{args.gust_period_s:.1f}_phi{args.gust_phase_deg:.0f}"
+        plot_flight(fno, model, actual, out_dir / f"trajectory_6dof_flight_{fno}{suffix}.png")
 
 
 if __name__ == "__main__":
