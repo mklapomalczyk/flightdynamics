@@ -43,11 +43,30 @@ from core.state6 import State6DOF
 from imu_reconstruction import detect_ignition
 from diag_drag import detect_events, baro_altitude, calib_acc_scale, smooth_gps_derivative, G0
 from gps_fusion import latlon_to_enu
+from models.wind import PowerLawGustWind
+from analyze_wind_sensitivity import read_measured_wind
 
 from analyze_per_flight_6dof import (
     read_flights, build_flight_thrust, build_scaled_mass, downrange_crossrange,
-    build_flight_wind,
+    GUST_PERIOD_S, GUST_PHASE_RAD,
 )
+
+
+def build_wind(base, fno, azimuth_deg):
+    """PowerLawGustWind z faktycznie zmierzonego wiatru dla tego lotu
+    (Open-Meteo, field_test_data/results/launch_weather_openmeteo.csv) --
+    gust_amp = gust/mean - 1. Zwraca None jesli brak pliku/wiersza dla
+    tego lotu."""
+    mw = read_measured_wind(base, fno)
+    if mw is None or mw["mean_speed_mps"] <= 0:
+        return None
+    dir_from_deg = (azimuth_deg + mw["rel_az_deg"]) % 360.0
+    gust_amp = mw["gust_speed_mps"] / mw["mean_speed_mps"] - 1.0
+    return PowerLawGustWind(
+        speed_ref_mps=mw["mean_speed_mps"], dir_from_deg=dir_from_deg, azimuth_deg=azimuth_deg,
+        h_ref_m=10.0, alpha_exp=0.16,
+        gust_amp=gust_amp, gust_period_s=GUST_PERIOD_S, gust_phase_rad=GUST_PHASE_RAD,
+    )
 
 
 def actual_time_series(base, fno, azimuth_deg, t_burn, elev_deg):
@@ -190,7 +209,7 @@ def main():
             print(f"Lot {fno}: brak thrust_flight_{fno}.csv (kalibracja ciagu) -- pomijam.")
             continue
 
-        wind = build_flight_wind(base, fno, r["azimuth"])
+        wind = build_wind(base, fno, r["azimuth"])
         if wind is None:
             print(f"Lot {fno}: brak zmierzonego wiatru (Open-Meteo) -- pomijam.")
             continue
