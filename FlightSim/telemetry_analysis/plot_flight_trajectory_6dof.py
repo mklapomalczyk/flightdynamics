@@ -56,7 +56,7 @@ from core.state6 import State6DOF
 from imu_reconstruction import detect_ignition
 from diag_drag import detect_events, baro_altitude, calib_acc_scale, smooth_gps_derivative, G0
 from gps_fusion import latlon_to_enu
-from models.wind import PowerLawGustWind
+from models.wind import PowerLawGustWind, PowerLawGustPulseWind
 from analyze_wind_sensitivity import read_measured_wind
 
 from analyze_per_flight_6dof import (
@@ -81,6 +81,25 @@ def build_wind(base, fno, azimuth_deg, gust_period_s=GUST_PERIOD_S, gust_phase_r
         speed_ref_mps=mw["mean_speed_mps"], dir_from_deg=dir_from_deg, azimuth_deg=azimuth_deg,
         h_ref_m=10.0, alpha_exp=0.16,
         gust_amp=gust_amp, gust_period_s=gust_period_s, gust_phase_rad=gust_phase_rad,
+    )
+
+
+def build_wind_pulse(base, fno, azimuth_deg, t_center_s=5.0, sigma_s=2.0):
+    """PowerLawGustPulseWind z faktycznie zmierzonego wiatru dla tego lotu
+    -- POJEDYNCZY zlokalizowany w czasie impuls gaussowski (gust_amp =
+    gust/mean - 1 w szczycie) zamiast sinusoidy trwajacej caly lot (patrz
+    build_wind()/PowerLawGustWind). t_center_s/sigma_s nadpisywalne -- do
+    przeszukania KIEDY (w jakim momencie lotu) pojedynczy podmuch
+    realistycznie mogl wystapic, zamiast zakladac ciagla oscylacje."""
+    mw = read_measured_wind(base, fno)
+    if mw is None or mw["mean_speed_mps"] <= 0:
+        return None
+    dir_from_deg = (azimuth_deg + mw["rel_az_deg"]) % 360.0
+    gust_amp = mw["gust_speed_mps"] / mw["mean_speed_mps"] - 1.0
+    return PowerLawGustPulseWind(
+        speed_ref_mps=mw["mean_speed_mps"], dir_from_deg=dir_from_deg, azimuth_deg=azimuth_deg,
+        h_ref_m=10.0, alpha_exp=0.16,
+        gust_amp=gust_amp, t_center_s=t_center_s, sigma_s=sigma_s,
     )
 
 
@@ -337,6 +356,14 @@ def main():
     parser.add_argument("--gust-phase-deg", type=float, default=math.degrees(GUST_PHASE_RAD),
                          help="faza podmuchu [deg] dla normalnego wykresu trajektorii "
                               "(domyslnie GUST_PHASE_RAD)")
+    parser.add_argument("--gust-pulse", action="store_true",
+                         help="uzyj PowerLawGustPulseWind (pojedynczy zlokalizowany w "
+                              "czasie impuls gaussowski) zamiast sinusoidy trwajacej caly "
+                              "lot (PowerLawGustWind) -- patrz build_wind_pulse()")
+    parser.add_argument("--gust-pulse-t-center", type=float, default=5.0,
+                         help="czas [s] od zaplonu szczytu impulsu (z --gust-pulse)")
+    parser.add_argument("--gust-pulse-sigma", type=float, default=2.0,
+                         help="szerokosc [s] impulsu gaussowskiego (z --gust-pulse)")
     args = parser.parse_args()
 
     base = get_data_dir()
@@ -427,9 +454,14 @@ def main():
                                      out_dir / f"roll_yaw_resonance_flight_{fno}{suffix}.png")
             continue
 
-        wind = build_wind(base, fno, r["azimuth"],
-                           gust_period_s=args.gust_period_s,
-                           gust_phase_rad=math.radians(args.gust_phase_deg))
+        if args.gust_pulse:
+            wind = build_wind_pulse(base, fno, r["azimuth"],
+                                     t_center_s=args.gust_pulse_t_center,
+                                     sigma_s=args.gust_pulse_sigma)
+        else:
+            wind = build_wind(base, fno, r["azimuth"],
+                               gust_period_s=args.gust_period_s,
+                               gust_phase_rad=math.radians(args.gust_phase_deg))
         if wind is None:
             print(f"Lot {fno}: brak zmierzonego wiatru (Open-Meteo) -- pomijam.")
             continue
@@ -438,9 +470,12 @@ def main():
                                    wind_model=wind)
         actual = actual_time_series(base, fno, r["azimuth"], t_burn, r["elevation"])
 
-        suffix = ""
-        if args.gust_period_s != GUST_PERIOD_S or args.gust_phase_deg != math.degrees(GUST_PHASE_RAD):
-            suffix = f"_T{args.gust_period_s:.1f}_phi{args.gust_phase_deg:.0f}"
+        if args.gust_pulse:
+            suffix = f"_pulse_tc{args.gust_pulse_t_center:.1f}_sig{args.gust_pulse_sigma:.1f}"
+        else:
+            suffix = ""
+            if args.gust_period_s != GUST_PERIOD_S or args.gust_phase_deg != math.degrees(GUST_PHASE_RAD):
+                suffix = f"_T{args.gust_period_s:.1f}_phi{args.gust_phase_deg:.0f}"
         plot_flight(fno, model, actual, out_dir / f"trajectory_6dof_flight_{fno}{suffix}.png")
 
 

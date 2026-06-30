@@ -185,6 +185,55 @@ class PowerLawGustWind(PowerLawWind):
                 f"az={self.azimuth_deg:.0f}°)")
 
 
+class PowerLawGustPulseWind(PowerLawWind):
+    """
+    PowerLawWind + POJEDYNCZY zlokalizowany w czasie podmuch (impuls
+    gaussowski) zamiast trwajacej caly lot oscylacji sinusoidalnej
+    (patrz PowerLawGustWind). Model: predkosc(t,h) = V_powerlaw(h) *
+    (1 + gust_amp * exp(-(t-t_center)^2 / (2*sigma^2))).
+
+    Motywacja: PowerLawGustWind aplikuje amplitude gust/mean-1 jako
+    SINUSOIDE trwajaca przez caly lot (~30-60s), wiec rakieta dostaje
+    powtarzajace sie uderzenia o tej samej amplitudzie przez caly czas
+    lotu, mimo ze realny podmuch wiatru to zazwyczaj pojedynczy,
+    przejsciowy wzrost predkosci trwajacy kilka sekund, nie powtarzajaca
+    sie oscylacja. PowerLawGustPulseWind modeluje wlasnie taki
+    pojedynczy, fizycznie bardziej realistyczny impuls -- do porownania
+    z wynikami sinusoidalnego sweepu.
+
+    Parameters
+    ----------
+    gust_amp : float
+        Amplituda podmuchu jako frakcja sredniej predkosci w szczycie
+        impulsu (np. gust_speed_mps/mean_speed_mps - 1).
+    t_center_s : float
+        Czas (od zaplonu) szczytu impulsu [s].
+    sigma_s : float
+        Szerokosc (odchylenie standardowe) impulsu gaussowskiego [s].
+        Domyslnie 2.0s -- typowy czas trwania pojedynczego podmuchu.
+    """
+
+    def __init__(self, speed_ref_mps: float, dir_from_deg: float, azimuth_deg: float,
+                 h_ref_m: float = 10.0, alpha_exp: float = 0.16, h_min_m: float = 0.5,
+                 gust_amp: float = 0.3, t_center_s: float = 5.0, sigma_s: float = 2.0):
+        super().__init__(speed_ref_mps, dir_from_deg, azimuth_deg,
+                          h_ref_m=h_ref_m, alpha_exp=alpha_exp, h_min_m=h_min_m)
+        self.gust_amp   = gust_amp
+        self.t_center_s = t_center_s
+        self.sigma_s    = sigma_s
+
+    def velocity_launch_frame(self, t: float, altitude_m: float) -> np.ndarray:
+        base = self.speed_at(altitude_m)
+        pulse = self.gust_amp * np.exp(-0.5 * ((t - self.t_center_s) / self.sigma_s) ** 2)
+        return max(base * (1.0 + pulse), 0.0) * self._dir_vec
+
+    def __repr__(self) -> str:
+        return (f"PowerLawGustPulseWind(V_ref={self.speed_ref_mps:.1f}m/s@{self.h_ref_m:.0f}m, "
+                f"alpha={self.alpha_exp:.2f}, gust_amp={self.gust_amp:.2f}, "
+                f"t_center={self.t_center_s:.1f}s, sigma={self.sigma_s:.1f}s, "
+                f"from={self.dir_from_deg:.0f}°, az={self.azimuth_deg:.0f}°)")
+
+
 def create_wind(model: str = "none", **kwargs) -> "WindModel | None":
     """
     Fabryka modelu wiatru.
@@ -196,6 +245,7 @@ def create_wind(model: str = "none", **kwargs) -> "WindModel | None":
         "horizontal"     -> HorizontalWind(**kwargs)
         "power_law"      -> PowerLawWind(**kwargs)
         "power_law_gust" -> PowerLawGustWind(**kwargs)
+        "power_law_gust_pulse" -> PowerLawGustPulseWind(**kwargs)
     """
     if model == "none":
         return None
@@ -205,5 +255,7 @@ def create_wind(model: str = "none", **kwargs) -> "WindModel | None":
         return PowerLawWind(**kwargs)
     elif model == "power_law_gust":
         return PowerLawGustWind(**kwargs)
+    elif model == "power_law_gust_pulse":
+        return PowerLawGustPulseWind(**kwargs)
     else:
         raise ValueError(f"Nieznany model wiatru: '{model}'.")
