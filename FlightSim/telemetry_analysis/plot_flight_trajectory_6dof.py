@@ -137,8 +137,9 @@ def model_time_series(aero, geom, atm, gravity, launcher, mass, prop, initial_st
     result = run_simulation_6dof(force_model, initial_state, t_max=100, dt_output=0.02,
                                   rtol=1e-6, atol=1e-8, max_step=0.05)
     qr_deg_s = np.degrees(np.sqrt(result.qr ** 2 + result.r ** 2))
+    p_deg_s = np.degrees(result.p)
     return dict(t=result.t, h=-result.z, downrange=result.x, crossrange=result.y,
-                V=result.speed, status=result.status, qr_deg_s=qr_deg_s)
+                V=result.speed, status=result.status, qr_deg_s=qr_deg_s, p_deg_s=p_deg_s)
 
 
 def coast_velocity_oscillation(t, h, V, t_apo):
@@ -263,6 +264,48 @@ def plot_gust_phase_sweep(fno, phases_rad, model_runs, out_png):
                      "diagnostyka marginalnego tlumienia (stale T, zmienna faza)")
 
 
+def plot_roll_yaw_resonance(fno, model, out_png):
+    """Diagnostyka rezonansu roll-pitch/yaw ('catastrophic yaw'): p(t)
+    (predkosc toczenia, napedzana momentem od zaklinowania platów wg
+    cant_angle) i |qr|(t) na wspolnym wykresie czasowym. Jesli wzrost
+    |qr| pokrywa sie w czasie ze spadkiem/przejsciem p przez okreslona
+    wartosc -- to podpis rezonansu roll-yaw (p przechodzi przez
+    czestosc wlasna pitch/yaw, gdy ta spada wraz z cisnieniem
+    dynamicznym po burnout). Jesli |qr| rosnie niezaleznie od
+    zachowania p -- to raczej inny mechanizm (np. zle dobrana
+    sztywnosc/tlumienie yaw)."""
+    fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
+
+    axes[0].plot(model["t"], model["p_deg_s"], color="tab:red", lw=1.2)
+    axes[0].axhline(0.0, color="k", lw=0.5)
+    axes[0].set_ylabel("p (roll) [°/s]"); axes[0].grid(alpha=0.3)
+    axes[0].set_title("Predkosc toczenia p(t)")
+
+    axes[1].plot(model["t"], model["qr_deg_s"], color="tab:blue", lw=1.2)
+    axes[1].axhline(45.0, color="r", ls="--", lw=1.0, label="prog tumblingu (45°/s)")
+    axes[1].set_ylabel("|qr| = sqrt(q²+r²) [°/s]"); axes[1].set_xlabel("czas od zaplonu [s]")
+    axes[1].grid(alpha=0.3); axes[1].set_title("Predkosc katowa pitch/yaw |qr|(t)")
+    axes[1].legend(fontsize=8)
+
+    # Adnotacja: pierwszy moment przekroczenia progu tumblingu + p w tej chwili
+    above = np.where(model["qr_deg_s"] > 45.0)[0]
+    if len(above) > 0:
+        i0 = int(above[0])
+        t0, p0 = model["t"][i0], model["p_deg_s"][i0]
+        for ax in axes:
+            ax.axvline(t0, color="g", ls=":", lw=1.0)
+        axes[0].annotate(f"pierwsze qr>45°/s\nt={t0:.2f}s, p={p0:.0f}°/s",
+                          xy=(t0, p0), xytext=(10, 10), textcoords="offset points",
+                          fontsize=8, color="g")
+
+    fig.suptitle(f"Lot {fno}: roll p(t) vs pitch/yaw |qr|(t) -- diagnostyka rezonansu "
+                 f"roll-pitch/yaw (status modelu: {model['status']})", fontsize=12)
+    plt.tight_layout()
+    plt.savefig(out_png, dpi=140, bbox_inches="tight")
+    plt.close()
+    print(f"Zapisano: {out_png}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Trajektoria/predkosc(t) model 6DOF vs dane polowe")
     parser.add_argument("flights", type=int, nargs="+", help="numery lotow, np. 16 17")
@@ -279,6 +322,13 @@ def main():
                               "(patrz plot_gust_phase_sweep())")
     parser.add_argument("--gust-period-sweep-T", type=float, default=GUST_PERIOD_S,
                          help="okres podmuchu [s] uzywany w --gust-phase-sweep (domyslnie GUST_PERIOD_S)")
+    parser.add_argument("--roll-resonance-check", action="store_true",
+                         help="zamiast normalnego wykresu generuje p(t) vs |qr|(t) -- diagnostyka "
+                              "rezonansu roll-pitch/yaw ('catastrophic yaw') zamiast wplywu wiatru "
+                              "(patrz plot_roll_yaw_resonance())")
+    parser.add_argument("--roll-resonance-no-wind", action="store_true",
+                         help="z --roll-resonance-check: pomija wiatr, zeby izolowac efekt "
+                              "rezonansu roll/pitch-yaw od wymuszenia podmuchem")
     args = parser.parse_args()
 
     base = get_data_dir()
@@ -355,6 +405,18 @@ def main():
                 continue
             plot_gust_phase_sweep(fno, phases_rad, model_runs,
                                    out_dir / f"gust_phase_sweep_flight_{fno}.png")
+            continue
+
+        if args.roll_resonance_check:
+            wind = None if args.roll_resonance_no_wind else build_wind(base, fno, r["azimuth"])
+            if not args.roll_resonance_no_wind and wind is None:
+                print(f"Lot {fno}: brak zmierzonego wiatru (Open-Meteo) -- pomijam.")
+                continue
+            model = model_time_series(aero, geom, atm, gravity, launcher, mass, prop_flight,
+                                       initial_state, wind_model=wind)
+            suffix = "_nowiatru" if args.roll_resonance_no_wind else ""
+            plot_roll_yaw_resonance(fno, model,
+                                     out_dir / f"roll_yaw_resonance_flight_{fno}{suffix}.png")
             continue
 
         wind = build_wind(base, fno, r["azimuth"])
