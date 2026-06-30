@@ -182,14 +182,21 @@ class ConstantAero:
         else:
             Cm = self.Cm_alpha * alpha
 
-        # Moment odchylający (yaw) — symetria z pitch: bryla osiowosymetryczna,
-        # wiec ta sama zaleznosc CN_alpha/arm dziala identycznie dla beta/r
-        # jak dla alpha/q (patrz docstring modulu, sekcja o MA_yaw).
+        # Moment odchylający (yaw) — bryla osiowosymetryczna, wiec |Cn_beta|
+        # = |Cm_alpha|, ALE ze znakiem przeciwnym (Cn_beta = -Cm_alpha) wzgledem
+        # statycznego/przywracajacego czlonu — konwencja osi cial (X w przod,
+        # Y w prawo, Z w dol) odwraca rcznosc przy przejsciu z plaszczyzny
+        # pitch (X-Z) do plaszczyzny yaw (X-Y): dbeta/dt ~ -r, podczas gdy
+        # dalpha/dt ~ +q. Bez tego odwrocenia znaku petla beta/r jest
+        # NIEstabilna (dodatnie sprzezenie zwrotne) zamiast oscylatora
+        # przywracajacego — patrz docstring modulu, sekcja o MA_yaw w
+        # force_model6.py. Tlumienie (Cnr=Cmq, ponizej) NIE zmienia znaku —
+        # to standardowa relacja dla bryl osiowosymetrycznych.
         CN_beta = self.CN_alpha * beta
         if self.use_xcp_moment:
-            Cn = CN_beta * arm / d_ref
+            Cn = -(CN_beta * arm / d_ref)
         else:
-            Cn = self.Cm_alpha * beta
+            Cn = -(self.Cm_alpha * beta)
 
         # Tłumienie kątowe (pitch/yaw damping) — Cmq=Cnr dla bryly
         # osiowosymetrycznej (brak osobnej tabeli Cnr, patrz docstring).
@@ -386,10 +393,16 @@ class TableAero:
         else:
             Cm = 0.0
 
-        # Moment odchylajacy (yaw) — symetria z pitch: bryla osiowosymetryczna,
-        # wiec ten sam Cm_table/xcp_table interpolowany przy beta zamiast
-        # alpha daje moment przywracajacy przy slizgu (patrz docstring
-        # modulu, sekcja o MA_yaw w force_model6.py).
+        # Moment odchylajacy (yaw) — bryla osiowosymetryczna: |Cn_beta| =
+        # |Cm_alpha|, ALE ze znakiem przeciwnym (Cn_beta = -Cm_alpha) dla
+        # czlonu statycznego/przywracajacego — konwencja osi cial (X w przod,
+        # Y w prawo, Z w dol) odwraca rcznosc przy przejsciu z plaszczyzny
+        # pitch (X-Z) do plaszczyzny yaw (X-Y): dbeta/dt ~ -r, podczas gdy
+        # dalpha/dt ~ +q. Bez tego odwrocenia znaku petla beta/r jest
+        # NIEstabilna (dodatnie sprzezenie zwrotne) zamiast oscylatora
+        # przywracajacego — patrz docstring modulu, sekcja o MA_yaw w
+        # force_model6.py. Tlumienie (Cnr=Cmq, ponizej) NIE zmienia znaku —
+        # to standardowa relacja dla bryl osiowosymetrycznych.
         if self.Cm_table is not None:
             Cn_datcom = self._interp(self.Cm_table, beta_clip, mach)
             if (self.xcp_table is not None
@@ -408,6 +421,7 @@ class TableAero:
             Cn = CN_beta * (xcg - xcp_interp_b) / d_ref
         else:
             Cn = 0.0
+        Cn = -Cn
 
         if speed > 1.0:
             # Użyj tabeli Cmq jeśli dostępna, inaczej stałej wartości.

@@ -211,11 +211,16 @@ class ForceModel6DOF:
 
         # ---- Momenty aerodynamiczne --------------------------------------- #
         MA_pitch = aero.MA_yy + M_ctrl
-        # MA_yaw: symetria z MA_pitch (bryla osiowosymetryczna) -- restoring
-        # moment od slizgu (beta) + tlumienie (Cnr=Cmq), patrz
-        # models/aerodynamics.py. Wczesniej hardcoded 0.0, co dawalo
-        # nietlumiony/nieprzywracany ruch yaw pod wiatrem (spurious
-        # "tumbling" status post-apogeum mimo realnego niskiego AoA).
+        # MA_yaw: restoring moment od slizgu (beta) + tlumienie (Cnr=Cmq),
+        # patrz models/aerodynamics.py -- |Cn_beta|=|Cm_alpha| ale ze
+        # znakiem przeciwnym (konwencja osi cial X-przod/Y-prawo/Z-dol
+        # odwraca rcznosc miedzy plaszczyzna pitch i yaw: dbeta/dt~-r,
+        # dalpha/dt~+q), wiec aero.MA_zz juz ma poprawny znak przywracajacy.
+        # Wczesniej hardcoded 0.0, co dawalo nietlumiony/nieprzywracany
+        # ruch yaw pod wiatrem (spurious "tumbling" post-apogeum). Pierwsza
+        # implementacja (commit 01bbfa5) kopiowala znak Cm wprost do Cn,
+        # co dawalo NIEstabilna (dodatnio sprzezona) petle beta/r zamiast
+        # przywracajacej -- naprawione znakiem minus w aerodynamics.py.
         MA_yaw   = aero.MA_zz
 
         # ---- Moment toczący od zaklinowania płetw (z CLL_table DATCOM) ---- #
