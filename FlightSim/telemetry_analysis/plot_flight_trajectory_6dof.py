@@ -16,6 +16,13 @@ Uzycie (lokalnie, z prawdziwym DATCOM):
 
 Sanity-check w kontenerze (bez DATCOM):
     python plot_flight_trajectory_6dof.py --no-rerun-datcom 16 17
+
+Sweep okresu podmuchu (diagnostyka "tumbling" pod wiatrem -- sprawdza
+czy utrata stabilnosci po apogeum jest rezonansem z arbitralnie
+przyjetym GUST_PERIOD_S=3.0s (NIE zwalidowanym wzgledem realnego
+podmuchu, patrz analyze_per_flight_6dof.py), czy realnym deficytem
+tlumienia aero modelu przy niskim cisnieniu dynamicznym po apogeum):
+    python plot_flight_trajectory_6dof.py --gust-period-sweep 1,2,3,5,8 19
 """
 
 import sys
@@ -52,11 +59,13 @@ from analyze_per_flight_6dof import (
 )
 
 
-def build_wind(base, fno, azimuth_deg):
+def build_wind(base, fno, azimuth_deg, gust_period_s=GUST_PERIOD_S, gust_phase_rad=GUST_PHASE_RAD):
     """PowerLawGustWind z faktycznie zmierzonego wiatru dla tego lotu
     (Open-Meteo, field_test_data/results/launch_weather_openmeteo.csv) --
     gust_amp = gust/mean - 1. Zwraca None jesli brak pliku/wiersza dla
-    tego lotu."""
+    tego lotu. gust_period_s/gust_phase_rad nadpisywalne (domyslnie
+    GUST_PERIOD_S/GUST_PHASE_RAD z analyze_per_flight_6dof.py) -- do
+    sweepu okresu podmuchu, patrz plot_gust_period_sweep()."""
     mw = read_measured_wind(base, fno)
     if mw is None or mw["mean_speed_mps"] <= 0:
         return None
@@ -65,7 +74,7 @@ def build_wind(base, fno, azimuth_deg):
     return PowerLawGustWind(
         speed_ref_mps=mw["mean_speed_mps"], dir_from_deg=dir_from_deg, azimuth_deg=azimuth_deg,
         h_ref_m=10.0, alpha_exp=0.16,
-        gust_amp=gust_amp, gust_period_s=GUST_PERIOD_S, gust_phase_rad=GUST_PHASE_RAD,
+        gust_amp=gust_amp, gust_period_s=gust_period_s, gust_phase_rad=gust_phase_rad,
     )
 
 
@@ -121,8 +130,9 @@ def model_time_series(aero, geom, atm, gravity, launcher, mass, prop, initial_st
     )
     result = run_simulation_6dof(force_model, initial_state, t_max=100, dt_output=0.02,
                                   rtol=1e-6, atol=1e-8, max_step=0.05)
+    qr_deg_s = np.degrees(np.sqrt(result.qr ** 2 + result.r ** 2))
     return dict(t=result.t, h=-result.z, downrange=result.x, crossrange=result.y,
-                V=result.speed, status=result.status)
+                V=result.speed, status=result.status, qr_deg_s=qr_deg_s)
 
 
 def plot_flight(fno, model, actual, out_png):
@@ -162,12 +172,50 @@ def plot_flight(fno, model, actual, out_png):
     print(f"Zapisano: {out_png}")
 
 
+def plot_gust_period_sweep(fno, periods_s, model_runs, out_png):
+    """Diagnostyka rezonansu: predkosc(t) i |qr|=sqrt(q^2+r^2) (deg/s)
+    po apogeum dla tej samej konfiguracji lotu, rozne GUST_PERIOD_S.
+    Jesli 'tumbling' (qr > 45 deg/s przez >=3s, linia progowa) pojawia
+    sie tylko dla niektorych okresow -> rezonans z arbitralnym
+    (niezwalidowanym) okresem podmuchu, nie realny deficyt tlumienia
+    aero. Jesli wystepuje dla wiekszosci/wszystkich okresow -> raczej
+    realny deficyt tlumienia post-apogeum w modelu aero."""
+    fig, axes = plt.subplots(2, 1, figsize=(11, 9), sharex=True)
+    colors = plt.cm.viridis(np.linspace(0, 0.9, len(periods_s)))
+
+    for period, model, col in zip(periods_s, model_runs, colors):
+        if model is None:
+            continue
+        label = f"T={period:.1f}s (status={model['status']})"
+        axes[0].plot(model["t"], model["V"], color=col, lw=1.3, label=label)
+        axes[1].plot(model["t"], model["qr_deg_s"], color=col, lw=1.0, label=label)
+
+    axes[1].axhline(45.0, color="r", ls="--", lw=1.0, label="prog tumblingu (45°/s)")
+    axes[0].set_ylabel("predkosc [m/s]"); axes[0].grid(alpha=0.3)
+    axes[0].set_title("Predkosc(t) per okres podmuchu")
+    axes[0].legend(fontsize=7, ncol=2)
+    axes[1].set_ylabel("|qr| = sqrt(q²+r²) [°/s]"); axes[1].set_xlabel("czas od zaplonu [s]")
+    axes[1].grid(alpha=0.3); axes[1].set_title("Predkosc katowa pitch/yaw(t) per okres podmuchu")
+    axes[1].legend(fontsize=7, ncol=2)
+
+    fig.suptitle(f"Lot {fno}: sweep okresu podmuchu (GUST_PERIOD_S) -- diagnostyka rezonansu "
+                 f"vs realny deficyt tlumienia post-apogeum", fontsize=12)
+    plt.tight_layout()
+    plt.savefig(out_png, dpi=140, bbox_inches="tight")
+    plt.close()
+    print(f"Zapisano: {out_png}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Trajektoria/predkosc(t) model 6DOF vs dane polowe")
     parser.add_argument("flights", type=int, nargs="+", help="numery lotow, np. 16 17")
     parser.add_argument("--case-ostra", default="rocket_70mm_baseline")
     parser.add_argument("--case-tepa", default="rocket_70mm_baseline_tepa")
     parser.add_argument("--no-rerun-datcom", action="store_true")
+    parser.add_argument("--gust-period-sweep", default=None,
+                         help="lista okresow podmuchu [s] po przecinku, np. '1,2,3,5,8' -- "
+                              "zamiast normalnego wykresu generuje sweep diagnostyczny "
+                              "(patrz plot_gust_period_sweep())")
     args = parser.parse_args()
 
     base = get_data_dir()
@@ -207,6 +255,24 @@ def main():
         prop_flight = build_flight_thrust(base, fno, t_ignition)
         if prop_flight is None:
             print(f"Lot {fno}: brak thrust_flight_{fno}.csv (kalibracja ciagu) -- pomijam.")
+            continue
+
+        if args.gust_period_sweep is not None:
+            periods_s = [float(p) for p in args.gust_period_sweep.split(",")]
+            model_runs = []
+            for period in periods_s:
+                wind = build_wind(base, fno, r["azimuth"], gust_period_s=period)
+                if wind is None:
+                    print(f"Lot {fno}: brak zmierzonego wiatru (Open-Meteo) -- pomijam.")
+                    model_runs = None
+                    break
+                model_runs.append(model_time_series(
+                    aero, geom, atm, gravity, launcher, mass, prop_flight, initial_state,
+                    wind_model=wind))
+            if model_runs is None:
+                continue
+            plot_gust_period_sweep(fno, periods_s, model_runs,
+                                    out_dir / f"gust_period_sweep_flight_{fno}.png")
             continue
 
         wind = build_wind(base, fno, r["azimuth"])
