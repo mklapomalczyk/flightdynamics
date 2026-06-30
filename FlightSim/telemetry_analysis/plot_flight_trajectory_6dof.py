@@ -23,6 +23,12 @@ przyjetym GUST_PERIOD_S=3.0s (NIE zwalidowanym wzgledem realnego
 podmuchu, patrz analyze_per_flight_6dof.py), czy realnym deficytem
 tlumienia aero modelu przy niskim cisnieniu dynamicznym po apogeum):
     python plot_flight_trajectory_6dof.py --gust-period-sweep 1,2,3,5,8 19
+
+Sweep fazy podmuchu (przy stalym okresie -- sprawdza czy utrata
+stabilnosci jest kwestia konkretnej fazy/timingu podmuchu, co
+wzmacnia hipoteze marginalnego/za slabego tlumienia post-apogeum,
+zamiast wezkopasmowego rezonansu z jednym okresem):
+    python plot_flight_trajectory_6dof.py --gust-phase-sweep 0,90,180,270 19
 """
 
 import sys
@@ -135,6 +141,31 @@ def model_time_series(aero, geom, atm, gravity, launcher, mass, prop, initial_st
                 V=result.speed, status=result.status, qr_deg_s=qr_deg_s)
 
 
+def coast_velocity_oscillation(t, h, V, t_apo):
+    """Amplituda oscylacji predkosci w fazie coast (po apogeum): odejmuje
+    od V(t) wygladzony (low-pass, okno 2s) trend i zwraca odchylenie
+    standardowe reszty na odcinku t > t_apo. Uzywane do porownania
+    'szumu' predkosci modelu (sztuczne oscylacje pod wiatrem) vs danych
+    polowych (oczekiwany gladki spadek -- patrz analiza lotu 19)."""
+    mask = (t > t_apo) & np.isfinite(V)
+    if mask.sum() < 10:
+        return float("nan")
+    tt, VV = t[mask], V[mask]
+    dt = float(np.median(np.diff(tt))) if len(tt) > 1 else 0.02
+    win = max(3, int(round(2.0 / max(dt, 1e-6))))
+    if win % 2 == 0:
+        win += 1
+    if win >= len(VV):
+        return float("nan")
+    kernel = np.ones(win) / win
+    trend = np.convolve(VV, kernel, mode="same")
+    resid = VV - trend
+    edge = win // 2
+    if len(resid) <= 2 * edge:
+        return float("nan")
+    return float(np.std(resid[edge:-edge]))
+
+
 def plot_flight(fno, model, actual, out_png):
     fig, axes = plt.subplots(2, 2, figsize=(13, 9))
 
@@ -171,39 +202,65 @@ def plot_flight(fno, model, actual, out_png):
     plt.close()
     print(f"Zapisano: {out_png}")
 
+    osc_model = coast_velocity_oscillation(model["t"], model["h"], model["V"], actual["t_apo"])
+    osc_actual = coast_velocity_oscillation(actual["t"], actual["h"], actual["V"], actual["t_apo"])
+    print(f"Lot {fno}: oscylacja predkosci coast (std reszty po odjeciu trendu 2s) -- "
+          f"model={osc_model:.1f} m/s, dane polowe={osc_actual:.1f} m/s "
+          f"(stosunek model/dane={osc_model / osc_actual if osc_actual > 1e-6 else float('nan'):.1f}x)")
 
-def plot_gust_period_sweep(fno, periods_s, model_runs, out_png):
-    """Diagnostyka rezonansu: predkosc(t) i |qr|=sqrt(q^2+r^2) (deg/s)
-    po apogeum dla tej samej konfiguracji lotu, rozne GUST_PERIOD_S.
-    Jesli 'tumbling' (qr > 45 deg/s przez >=3s, linia progowa) pojawia
-    sie tylko dla niektorych okresow -> rezonans z arbitralnym
-    (niezwalidowanym) okresem podmuchu, nie realny deficyt tlumienia
-    aero. Jesli wystepuje dla wiekszosci/wszystkich okresow -> raczej
-    realny deficyt tlumienia post-apogeum w modelu aero."""
+
+def plot_gust_sweep(fno, labels, model_runs, out_png, sweep_name, title_extra):
+    """Wspolny wykres dla sweepu okresu/fazy podmuchu: predkosc(t) i
+    |qr|=sqrt(q^2+r^2) (deg/s) po apogeum dla tej samej konfiguracji
+    lotu, rozne wartosci parametru podmuchu -- patrz
+    plot_gust_period_sweep()/plot_gust_phase_sweep()."""
     fig, axes = plt.subplots(2, 1, figsize=(11, 9), sharex=True)
-    colors = plt.cm.viridis(np.linspace(0, 0.9, len(periods_s)))
+    colors = plt.cm.viridis(np.linspace(0, 0.9, len(labels)))
 
-    for period, model, col in zip(periods_s, model_runs, colors):
+    for label_val, model, col in zip(labels, model_runs, colors):
         if model is None:
             continue
-        label = f"T={period:.1f}s (status={model['status']})"
+        label = f"{label_val} (status={model['status']})"
         axes[0].plot(model["t"], model["V"], color=col, lw=1.3, label=label)
         axes[1].plot(model["t"], model["qr_deg_s"], color=col, lw=1.0, label=label)
 
     axes[1].axhline(45.0, color="r", ls="--", lw=1.0, label="prog tumblingu (45°/s)")
     axes[0].set_ylabel("predkosc [m/s]"); axes[0].grid(alpha=0.3)
-    axes[0].set_title("Predkosc(t) per okres podmuchu")
+    axes[0].set_title(f"Predkosc(t) per {sweep_name}")
     axes[0].legend(fontsize=7, ncol=2)
     axes[1].set_ylabel("|qr| = sqrt(q²+r²) [°/s]"); axes[1].set_xlabel("czas od zaplonu [s]")
-    axes[1].grid(alpha=0.3); axes[1].set_title("Predkosc katowa pitch/yaw(t) per okres podmuchu")
+    axes[1].grid(alpha=0.3); axes[1].set_title(f"Predkosc katowa pitch/yaw(t) per {sweep_name}")
     axes[1].legend(fontsize=7, ncol=2)
 
-    fig.suptitle(f"Lot {fno}: sweep okresu podmuchu (GUST_PERIOD_S) -- diagnostyka rezonansu "
-                 f"vs realny deficyt tlumienia post-apogeum", fontsize=12)
+    fig.suptitle(f"Lot {fno}: sweep {sweep_name} -- {title_extra}", fontsize=12)
     plt.tight_layout()
     plt.savefig(out_png, dpi=140, bbox_inches="tight")
     plt.close()
     print(f"Zapisano: {out_png}")
+
+
+def plot_gust_period_sweep(fno, periods_s, model_runs, out_png):
+    """Diagnostyka rezonansu. Jesli 'tumbling' (qr > 45 deg/s przez
+    >=3s, linia progowa) pojawia sie tylko dla niektorych okresow ->
+    rezonans z arbitralnym (niezwalidowanym) okresem podmuchu, nie
+    realny deficyt tlumienia aero. Jesli wystepuje dla wiekszosci/
+    wszystkich okresow -> raczej realny deficyt tlumienia post-apogeum
+    w modelu aero."""
+    labels = [f"T={p:.1f}s" for p in periods_s]
+    plot_gust_sweep(fno, labels, model_runs, out_png, "okresu podmuchu (GUST_PERIOD_S)",
+                     "diagnostyka rezonansu vs realny deficyt tlumienia post-apogeum")
+
+
+def plot_gust_phase_sweep(fno, phases_rad, model_runs, out_png):
+    """Sweep fazy podmuchu przy STALYM okresie (domyslnie GUST_PERIOD_S
+    z analyze_per_flight_6dof.py). Jesli tumbling wystepuje tylko dla
+    wybranych faz -> uklad jest na granicy stabilnosci (marginalne
+    tlumienie post-apogeum), sama faza/timing podmuchu decyduje czy
+    qr przekroczy prog -- to wzmacnia hipoteze 'slabego tlumienia',
+    nie 'wezkopasmowego rezonansu z konkretnym okresem'."""
+    labels = [f"phi={math.degrees(p):.0f}°" for p in phases_rad]
+    plot_gust_sweep(fno, labels, model_runs, out_png, "fazy podmuchu (GUST_PHASE_RAD)",
+                     "diagnostyka marginalnego tlumienia (stale T, zmienna faza)")
 
 
 def main():
@@ -216,6 +273,12 @@ def main():
                          help="lista okresow podmuchu [s] po przecinku, np. '1,2,3,5,8' -- "
                               "zamiast normalnego wykresu generuje sweep diagnostyczny "
                               "(patrz plot_gust_period_sweep())")
+    parser.add_argument("--gust-phase-sweep", default=None,
+                         help="lista faz podmuchu [deg] po przecinku, np. '0,90,180,270' -- "
+                              "okres staly (GUST_PERIOD_S, nadpisywalny przez --gust-period-sweep-T) "
+                              "(patrz plot_gust_phase_sweep())")
+    parser.add_argument("--gust-period-sweep-T", type=float, default=GUST_PERIOD_S,
+                         help="okres podmuchu [s] uzywany w --gust-phase-sweep (domyslnie GUST_PERIOD_S)")
     args = parser.parse_args()
 
     base = get_data_dir()
@@ -273,6 +336,25 @@ def main():
                 continue
             plot_gust_period_sweep(fno, periods_s, model_runs,
                                     out_dir / f"gust_period_sweep_flight_{fno}.png")
+            continue
+
+        if args.gust_phase_sweep is not None:
+            phases_rad = [math.radians(float(p)) for p in args.gust_phase_sweep.split(",")]
+            model_runs = []
+            for phase in phases_rad:
+                wind = build_wind(base, fno, r["azimuth"],
+                                   gust_period_s=args.gust_period_sweep_T, gust_phase_rad=phase)
+                if wind is None:
+                    print(f"Lot {fno}: brak zmierzonego wiatru (Open-Meteo) -- pomijam.")
+                    model_runs = None
+                    break
+                model_runs.append(model_time_series(
+                    aero, geom, atm, gravity, launcher, mass, prop_flight, initial_state,
+                    wind_model=wind))
+            if model_runs is None:
+                continue
+            plot_gust_phase_sweep(fno, phases_rad, model_runs,
+                                   out_dir / f"gust_phase_sweep_flight_{fno}.png")
             continue
 
         wind = build_wind(base, fno, r["azimuth"])
