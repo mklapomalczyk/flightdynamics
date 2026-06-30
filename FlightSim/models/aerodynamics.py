@@ -65,12 +65,14 @@ class AeroForces:
     FA_x:   float   # siła aerodynamiczna wzdłuż osi X body [N] (ujemna = opór)
     FA_z:   float   # siła aerodynamiczna wzdłuż osi Z body [N]
     MA_yy:  float   # moment aerodynamiczny wokół osi Y (pitch) [N·m]
+    MA_zz:  float = 0.0   # moment aerodynamiczny wokół osi Z (yaw) [N·m]
 
     # Wielkości pomocnicze (do logowania / debugowania)
     q_dyn:  float = 0.0   # ciśnienie dynamiczne [Pa]
     CA:     float = 0.0   # osiowy współczynnik siły [-]
     CN:     float = 0.0   # normalny współczynnik siły [-]
     Cm:     float = 0.0   # współczynnik momentu pochylającego [-]
+    Cn:     float = 0.0   # współczynnik momentu odchylającego (yaw) [-]
     alpha:  float = 0.0   # kąt natarcia [rad]
     mach:   float = 0.0   # liczba Macha [-]
 
@@ -98,6 +100,8 @@ class AeroModel(Protocol):
         d_ref:       float,      # średnica referencyjna [m]
         alpha_total: Optional[float] = None,  # calkowity kat natarcia [rad]
                                                # (alpha+beta, do CA — patrz docstring modulu)
+        beta:        float = 0.0,  # kąt ślizgu [rad] (do momentu odchylającego, symetria z alpha)
+        r_rate:      float = 0.0,  # prędkość kątowa yaw [rad/s] (do Cnr, symetria z Cmq)
     ) -> AeroForces: ...
 
 
@@ -158,6 +162,8 @@ class ConstantAero:
         S_ref:       float,
         d_ref:       float,
         alpha_total: Optional[float] = None,
+        beta:        float = 0.0,
+        r_rate:      float = 0.0,
     ) -> AeroForces:
 
         # Współczynniki
@@ -176,19 +182,34 @@ class ConstantAero:
         else:
             Cm = self.Cm_alpha * alpha
 
-        # Tłumienie kątowe (pitch damping)
+        # Moment odchylający (yaw) — symetria z pitch: bryla osiowosymetryczna,
+        # wiec ta sama zaleznosc CN_alpha/arm dziala identycznie dla beta/r
+        # jak dla alpha/q (patrz docstring modulu, sekcja o MA_yaw).
+        CN_beta = self.CN_alpha * beta
+        if self.use_xcp_moment:
+            Cn = CN_beta * arm / d_ref
+        else:
+            Cn = self.Cm_alpha * beta
+
+        # Tłumienie kątowe (pitch/yaw damping) — Cmq=Cnr dla bryly
+        # osiowosymetrycznej (brak osobnej tabeli Cnr, patrz docstring).
         # Normalizacja: Cmq * (q * d_ref / (2 * V))
         if speed > 1.0:
             # Użyj tabeli Cmq jeśli dostępna, inaczej stałej wartości
             if self.Cmq_table is not None:
-                cmq = self._interp(self.Cmq_table, alpha_clip, mach)
+                cmq = self._interp(self.Cmq_table, alpha, mach)
+                cnr = self._interp(self.Cmq_table, beta, mach)
             else:
                 cmq = self.Cmq
+                cnr = self.Cmq
             Cm_damping = cmq * (q_rate * d_ref / (2.0 * speed))
+            Cn_damping = cnr * (r_rate * d_ref / (2.0 * speed))
         else:
             Cm_damping = 0.0
+            Cn_damping = 0.0
 
         Cm_total = Cm + Cm_damping
+        Cn_total = Cn + Cn_damping
 
         # Siły w body frame
         # Konwencja body: X wzdłuż osi, Z prostopadle (w górę)
@@ -208,15 +229,18 @@ class ConstantAero:
         FA_z = q_dyn * S_ref * ( CN * ca - CA * sa)
 
         MA_yy = q_dyn * S_ref * d_ref * Cm_total
+        MA_zz = q_dyn * S_ref * d_ref * Cn_total
 
         return AeroForces(
             FA_x  = FA_x,
             FA_z  = FA_z,
             MA_yy = MA_yy,
+            MA_zz = MA_zz,
             q_dyn = q_dyn,
             CA    = CA,
             CN    = CN,
             Cm    = Cm_total,
+            Cn    = Cn_total,
             alpha = alpha,
             mach  = mach,
         )
@@ -315,6 +339,8 @@ class TableAero:
         S_ref:       float,
         d_ref:       float,
         alpha_total: Optional[float] = None,
+        beta:        float = 0.0,
+        r_rate:      float = 0.0,
     ) -> AeroForces:
 
         # Ogranicz alpha do zakresu tabeli — poza nim DATCOM nie ma sensu
@@ -322,9 +348,11 @@ class TableAero:
         alpha_max = float(self.alpha_table[-1])
         alpha_min = float(self.alpha_table[0])
         alpha_clip = float(np.clip(alpha, alpha_min, alpha_max))
+        beta_clip  = float(np.clip(beta,  alpha_min, alpha_max))
 
         CA = self._interp(self.CA_table, alpha_clip, mach)
         CN = self._interp(self.CN_table, alpha_clip, mach)
+        CN_beta = self._interp(self.CN_table, beta_clip, mach)
 
         # Opor osiowy (FA_x) dla bryly osiowosymetrycznej zalezy od calkowitego
         # kata natarcia (alpha+beta), nie tylko od plaszczyzny pitch — patrz
@@ -358,32 +386,65 @@ class TableAero:
         else:
             Cm = 0.0
 
+        # Moment odchylajacy (yaw) — symetria z pitch: bryla osiowosymetryczna,
+        # wiec ten sam Cm_table/xcp_table interpolowany przy beta zamiast
+        # alpha daje moment przywracajacy przy slizgu (patrz docstring
+        # modulu, sekcja o MA_yaw w force_model6.py).
+        if self.Cm_table is not None:
+            Cn_datcom = self._interp(self.Cm_table, beta_clip, mach)
+            if (self.xcp_table is not None
+                    and abs(self.xcg_ref) > 1e-6
+                    and abs(xcg - self.xcg_ref) > 1e-6):
+                xcp_interp_b = self._interp(self.xcp_table, beta_clip, mach)
+                denom_b = self.xcg_ref - xcp_interp_b
+                if abs(denom_b) > 1e-4:
+                    Cn = Cn_datcom * (xcg - xcp_interp_b) / denom_b
+                else:
+                    Cn = Cn_datcom
+            else:
+                Cn = Cn_datcom
+        elif self.xcp_table is not None:
+            xcp_interp_b = self._interp(self.xcp_table, beta_clip, mach)
+            Cn = CN_beta * (xcg - xcp_interp_b) / d_ref
+        else:
+            Cn = 0.0
+
         if speed > 1.0:
-            # Użyj tabeli Cmq jeśli dostępna, inaczej stałej wartości
+            # Użyj tabeli Cmq jeśli dostępna, inaczej stałej wartości.
+            # Cnr = Cmq (ta sama tabela przy beta) — bryla osiowosymetryczna,
+            # brak osobnej tabeli Cnr z DATCOM.
             if self.Cmq_table is not None:
                 cmq = self._interp(self.Cmq_table, alpha_clip, mach)
+                cnr = self._interp(self.Cmq_table, beta_clip, mach)
             else:
                 cmq = self.Cmq
+                cnr = self.Cmq
             Cm_damping = cmq * (q_rate * d_ref / (2.0 * speed))
+            Cn_damping = cnr * (r_rate * d_ref / (2.0 * speed))
         else:
             Cm_damping = 0.0
+            Cn_damping = 0.0
 
         Cm_total = Cm + Cm_damping
+        Cn_total = Cn + Cn_damping
 
         ca, sa = np.cos(alpha), np.sin(alpha)
         ca_t, sa_t = np.cos(alpha_total_clip), np.sin(alpha_total_clip)
         FA_x = q_dyn * S_ref * (-CA_x * ca_t - CN_x * sa_t)
         FA_z = q_dyn * S_ref * ( CN * ca - CA * sa)
         MA_yy = q_dyn * S_ref * d_ref * Cm_total
+        MA_zz = q_dyn * S_ref * d_ref * Cn_total
 
         return AeroForces(
             FA_x  = FA_x,
             FA_z  = FA_z,
             MA_yy = MA_yy,
+            MA_zz = MA_zz,
             q_dyn = q_dyn,
             CA    = CA,
             CN    = CN,
             Cm    = Cm_total,
+            Cn    = Cn_total,
             alpha = alpha,
             mach  = mach,
         )

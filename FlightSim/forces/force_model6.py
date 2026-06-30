@@ -187,6 +187,8 @@ class ForceModel6DOF:
             S_ref       = self.geom.S_ref,
             d_ref       = self.geom.d_ref,
             alpha_total = alpha_total,
+            beta        = beta,
+            r_rate      = r,
         )
 
         FA_x = aero.FA_x
@@ -209,7 +211,12 @@ class ForceModel6DOF:
 
         # ---- Momenty aerodynamiczne --------------------------------------- #
         MA_pitch = aero.MA_yy + M_ctrl
-        MA_yaw   = 0.0
+        # MA_yaw: symetria z MA_pitch (bryla osiowosymetryczna) -- restoring
+        # moment od slizgu (beta) + tlumienie (Cnr=Cmq), patrz
+        # models/aerodynamics.py. Wczesniej hardcoded 0.0, co dawalo
+        # nietlumiony/nieprzywracany ruch yaw pod wiatrem (spurious
+        # "tumbling" status post-apogeum mimo realnego niskiego AoA).
+        MA_yaw   = aero.MA_zz
 
         # ---- Moment toczący od zaklinowania płetw (z CLL_table DATCOM) ---- #
         MA_roll_cant = 0.0
