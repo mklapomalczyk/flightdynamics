@@ -389,6 +389,10 @@ def main():
     parser.add_argument("--gust-phase-deg", type=float, default=math.degrees(GUST_PHASE_RAD),
                          help="faza podmuchu [deg] dla normalnego wykresu trajektorii "
                               "(domyslnie GUST_PHASE_RAD)")
+    parser.add_argument("--no-wind", action="store_true",
+                         help="wylacz wiatr dla normalnego wykresu trajektorii (model bez "
+                              "zadnego wiatru) -- do izolowania efektow aero/elewacji/oporu "
+                              "od wplywu wiatru")
     parser.add_argument("--gust-pulse", action="store_true",
                          help="uzyj PowerLawGustPulseWind (pojedynczy zlokalizowany w "
                               "czasie impuls gaussowski) zamiast sinusoidy trwajacej caly "
@@ -508,7 +512,9 @@ def main():
                                      out_dir / f"roll_yaw_resonance_flight_{fno}{suffix}.png")
             continue
 
-        if args.gust_pulse:
+        if args.no_wind:
+            wind = None
+        elif args.gust_pulse:
             wind = build_wind_pulse(base, fno, r["azimuth"],
                                      t_center_s=args.gust_pulse_t_center,
                                      sigma_s=args.gust_pulse_sigma)
@@ -516,7 +522,7 @@ def main():
             wind = build_wind(base, fno, r["azimuth"],
                                gust_period_s=args.gust_period_s,
                                gust_phase_rad=math.radians(args.gust_phase_deg))
-        if wind is None:
+        if wind is None and not args.no_wind:
             print(f"Lot {fno}: brak zmierzonego wiatru (Open-Meteo) -- pomijam.")
             continue
 
@@ -524,7 +530,9 @@ def main():
                                    wind_model=wind)
         actual = actual_time_series(base, fno, r["azimuth"], t_burn, elev_deg)
 
-        if args.gust_pulse:
+        if args.no_wind:
+            suffix = "_nowiatru"
+        elif args.gust_pulse:
             suffix = f"_pulse_tc{args.gust_pulse_t_center:.1f}_sig{args.gust_pulse_sigma:.1f}"
         else:
             suffix = ""
