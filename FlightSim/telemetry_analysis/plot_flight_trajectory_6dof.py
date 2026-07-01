@@ -103,6 +103,39 @@ def build_wind_pulse(base, fno, azimuth_deg, t_center_s=5.0, sigma_s=2.0):
     )
 
 
+def estimate_elevation_from_telemetry(base, fno):
+    """Szacuje kat elewacji wyrzutni z akcelerometru w spoczynku (przed
+    zaplonem), niezaleznie od wartosci zapisanej w configs.txt.
+
+    Nieruchoma rakieta na szynie mierzy sile wlasciwa = +g w gore. W osi
+    cial (X w przod wzdluz rakiety, Y w prawo, Z w dol) wektor 'w gore'
+    to (sin th, 0, -cos th) dla elewacji th, wiec:
+        acc_x_rest =  g * sin(th)
+        acc_z_rest = -g * cos(th)
+    Uzywamy atan2(acc_x, -acc_z) -- odporne na skale/bias wspolne dla obu
+    osi i nie wymaga zalozenia |a|=1g. Zwraca (elev_deg, off_plane_deg),
+    gdzie off_plane to skladowa acc_y (roll/niewspolosiowosc czujnika) w
+    stopniach -- diagnostyka wiarygodnosci estymaty.
+
+    UWAGA: to jest FIZYCZNY kat szyny wg IMU, ktory moze roznic sie od
+    kata 'dopasowanego' do wysokosci/czasu apogeum (jesli przeloty w
+    wysokosci apogeum wynikaja z aero/ciagu/masy, a nie z geometrii
+    startu, dopasowany kat bedzie kompensowal ten blad i NIE zgodzi sie
+    z IMU)."""
+    fpath = resolve_data_file(f"ARTEMIDA_{fno}_LOT.txt")
+    tel = parse_telemetry(fpath, verbose=False)
+    t_ign_abs = detect_ignition(tel)
+    rest = tel.time < (t_ign_abs - 0.5)
+    if np.sum(rest) < 5:
+        rest = tel.time < t_ign_abs
+    ax = float(np.nanmean(tel.acc_x[rest]))
+    ay = float(np.nanmean(tel.acc_y[rest]))
+    az = float(np.nanmean(tel.acc_z[rest]))
+    elev_deg = math.degrees(math.atan2(ax, -az))
+    off_plane_deg = math.degrees(math.atan2(abs(ay), math.hypot(ax, az)))
+    return elev_deg, off_plane_deg
+
+
 def actual_time_series(base, fno, azimuth_deg, t_burn, elev_deg):
     """Szeregi czasowe rzeczywiste (od zaplonu, AGL): t, h, downrange,
     crossrange, V -- ta sama hybryda predkosci co simulate_ascent() w
@@ -364,14 +397,17 @@ def main():
                          help="czas [s] od zaplonu szczytu impulsu (z --gust-pulse)")
     parser.add_argument("--gust-pulse-sigma", type=float, default=2.0,
                          help="szerokosc [s] impulsu gaussowskiego (z --gust-pulse)")
-    parser.add_argument("--elevation-deg", type=float, default=None,
-                         help="nadpisz kat elewacji [deg] z configs.txt (hipoteza: "
-                              "wyrzutnia byla ustawiona pod innym katem niz zapisany -- "
-                              "dla lotu 19 elew=42 odtwarza wysokosc/czas apogeum lepiej "
-                              "niz zapisane 45). Nadpisuje ZAROWNO kat startowy modelu jak "
-                              "i rzut grawitacji w rekonstrukcji predkosci z akcelerometru "
-                              "(a_kin = a_meas - g*sin(elew)) -- oba uzywaja tej samej, "
-                              "prawdziwej elewacji.")
+    parser.add_argument("--elevation-deg", type=str, default=None,
+                         help="nadpisz kat elewacji z configs.txt: liczba [deg] LUB "
+                              "'auto' (oszacuj z telemetrii -- akcelerometr w spoczynku "
+                              "przed zaplonem, patrz estimate_elevation_from_telemetry()). "
+                              "Nadpisuje ZAROWNO kat startowy modelu jak i rzut grawitacji "
+                              "w rekonstrukcji predkosci z akcelerometru (a_kin = a_meas - "
+                              "g*sin(elew)) -- oba uzywaja tej samej, prawdziwej elewacji. "
+                              "UWAGA: 'auto' zwraca FIZYCZNY kat szyny wg IMU (dla lotu 19 "
+                              "~47.6 deg), ktory moze roznic sie od kata dopasowanego do "
+                              "apogeum -- rozbieznosc wskazuje ze przelot apogeum wynika z "
+                              "aero/ciagu/masy, nie z geometrii startu.")
     args = parser.parse_args()
 
     base = get_data_dir()
@@ -406,9 +442,16 @@ def main():
 
         mass = build_scaled_mass(cfg_base, t_ignition, r["m_rocket"])
         atm = create_atmosphere("ISA_LAUNCH", T0_C=r["T_C"], p0_hpa=r["p_hpa"], RH_pct=r["RH_pct"])
-        elev_deg = args.elevation_deg if args.elevation_deg is not None else r["elevation"]
+        elev_deg = r["elevation"]
         if args.elevation_deg is not None:
-            print(f"Lot {fno}: elewacja nadpisana {r['elevation']:.1f} -> {elev_deg:.1f} deg")
+            if args.elevation_deg.lower() in ("auto", "telemetry", "imu"):
+                elev_deg, off_plane = estimate_elevation_from_telemetry(base, fno)
+                print(f"Lot {fno}: elewacja z telemetrii (IMU w spoczynku) = "
+                      f"{elev_deg:.2f} deg (off-plane acc_y = {off_plane:.2f} deg), "
+                      f"configs.txt = {r['elevation']:.1f} deg")
+            else:
+                elev_deg = float(args.elevation_deg)
+                print(f"Lot {fno}: elewacja nadpisana {r['elevation']:.1f} -> {elev_deg:.1f} deg")
         initial_state = State6DOF.initial(elevation_deg=elev_deg, azimuth_deg=r["azimuth"])
 
         prop_flight = build_flight_thrust(base, fno, t_ignition)
@@ -488,7 +531,7 @@ def main():
             if args.gust_period_s != GUST_PERIOD_S or args.gust_phase_deg != math.degrees(GUST_PHASE_RAD):
                 suffix = f"_T{args.gust_period_s:.1f}_phi{args.gust_phase_deg:.0f}"
         if args.elevation_deg is not None:
-            suffix += f"_elev{args.elevation_deg:.0f}"
+            suffix += f"_elev{elev_deg:.0f}"
         plot_flight(fno, model, actual, out_dir / f"trajectory_6dof_flight_{fno}{suffix}.png")
 
 
