@@ -108,14 +108,17 @@ def estimate_elevation_from_telemetry(base, fno):
     zaplonem), niezaleznie od wartosci zapisanej w configs.txt.
 
     Nieruchoma rakieta na szynie mierzy sile wlasciwa = +g w gore. W osi
-    cial (X w przod wzdluz rakiety, Y w prawo, Z w dol) wektor 'w gore'
-    to (sin th, 0, -cos th) dla elewacji th, wiec:
-        acc_x_rest =  g * sin(th)
-        acc_z_rest = -g * cos(th)
-    Uzywamy atan2(acc_x, -acc_z) -- odporne na skale/bias wspolne dla obu
-    osi i nie wymaga zalozenia |a|=1g. Zwraca (elev_deg, off_plane_deg),
-    gdzie off_plane to skladowa acc_y (roll/niewspolosiowosc czujnika) w
-    stopniach -- diagnostyka wiarygodnosci estymaty.
+    cial (X w przod wzdluz rakiety, Y w prawo, Z w dol) skladowa wektora
+    'w gore' wzdluz osi X to sin(th), wiec:
+        acc_x_rest = g * sin(th)   (DODATNI gdy nos w gore)
+    Elewacja = asin(acc_x / |a|) -- DOKLADNA niezaleznie od rolla i
+    azymutu (elewacja osi X nad poziomem zalezy tylko od skladowej X
+    pionu). |a| = |sredni wektor accel w spoczynku| (odporne na wspolna
+    skale/bias). Znak: acc_x>0 => nos w gore => elewacja dodatnia.
+
+    Zwraca (elev_deg, off_plane_deg), gdzie off_plane = asin(|acc_y|/|a|)
+    w stopniach — mierzy roll/niewspolosiowosc czujnika (skladowa pionu
+    poza plaszczyzna X-Z); duza wartosc => estymata mniej wiarygodna.
 
     UWAGA: to jest FIZYCZNY kat szyny wg IMU, ktory moze roznic sie od
     kata 'dopasowanego' do wysokosci/czasu apogeum (jesli przeloty w
@@ -131,9 +134,38 @@ def estimate_elevation_from_telemetry(base, fno):
     ax = float(np.nanmean(tel.acc_x[rest]))
     ay = float(np.nanmean(tel.acc_y[rest]))
     az = float(np.nanmean(tel.acc_z[rest]))
-    elev_deg = math.degrees(math.atan2(ax, -az))
-    off_plane_deg = math.degrees(math.atan2(abs(ay), math.hypot(ax, az)))
+    g_mag = math.sqrt(ax*ax + ay*ay + az*az)
+    if g_mag < 1e-6:
+        return float("nan"), float("nan")
+    elev_deg      = math.degrees(math.asin(max(-1.0, min(1.0, ax / g_mag))))
+    off_plane_deg = math.degrees(math.asin(max(-1.0, min(1.0, abs(ay) / g_mag))))
     return elev_deg, off_plane_deg
+
+
+def estimate_azimuth_from_telemetry(base, fno):
+    """Szacuje azymut strzalu z GPS-owego sladu naziemnego (heading toru
+    lotu), niezaleznie od wartosci w configs.txt. Azymutu NIE da sie
+    wyznaczyc z akcelerometru (grawitacja jest pionowa -> heading wokol
+    osi pionowej nieobserwowalny bez magnetometru); GPS daje go wprost.
+
+    Metoda: wektor przemieszczenia poziomego od zaplonu do apogeum GPS
+    (dluga baza -> odporne na szum GPS przy padzie), heading kompasowy
+    atan2(dE, dN) [0=N, 90=E, zgodnie z konwencja azymutu configs.txt].
+    Slad lotu 19 jest praktycznie prosty (~344 deg przez caly lot), wiec
+    baza zaplon->apogeum dobrze reprezentuje kierunek strzalu.
+
+    Zwraca (azimuth_deg, horiz_dist_m) — horiz_dist to dlugosc bazy
+    (diagnostyka wiarygodnosci; male => heading niepewny)."""
+    fpath = resolve_data_file(f"ARTEMIDA_{fno}_LOT.txt")
+    tel = parse_telemetry(fpath, verbose=False)
+    t_ign_abs = detect_ignition(tel)
+    i_ign, _, i_apo, _ = detect_events(tel, t_ign_abs)
+    e, n = latlon_to_enu(tel.lat, tel.lon, tel.lat[i_ign], tel.lon[i_ign])
+    de = float(e[i_apo] - e[i_ign])
+    dn = float(n[i_apo] - n[i_ign])
+    horiz = math.hypot(de, dn)
+    azimuth_deg = math.degrees(math.atan2(de, dn)) % 360.0
+    return azimuth_deg, horiz
 
 
 def actual_time_series(base, fno, azimuth_deg, t_burn, elev_deg):
@@ -412,6 +444,16 @@ def main():
                               "~47.6 deg), ktory moze roznic sie od kata dopasowanego do "
                               "apogeum -- rozbieznosc wskazuje ze przelot apogeum wynika z "
                               "aero/ciagu/masy, nie z geometrii startu.")
+    parser.add_argument("--azimuth-deg", type=str, default=None,
+                         help="nadpisz azymut strzalu z configs.txt: liczba [deg] LUB "
+                              "'auto' (oszacuj z GPS-owego sladu naziemnego -- heading "
+                              "zaplon->apogeum, patrz estimate_azimuth_from_telemetry()). "
+                              "Uzywany SPOJNIE do: rzutu downrange/crossrange danych "
+                              "polowych, kierunku wiatru i ukladu startowego modelu. "
+                              "UWAGA: azymutu nie da sie policzyc z IMU (grawitacja pionowa); "
+                              "'auto' bierze go z GPS. Dla lotu 19 GPS=~344 deg vs "
+                              "configs.txt=325 -- rozbieznosc ~19 deg tlumaczy pozorny "
+                              "crossrange jako artefakt rzutu na zly azymut, nie dryf wiatrowy.")
     args = parser.parse_args()
 
     base = get_data_dir()
@@ -456,7 +498,19 @@ def main():
             else:
                 elev_deg = float(args.elevation_deg)
                 print(f"Lot {fno}: elewacja nadpisana {r['elevation']:.1f} -> {elev_deg:.1f} deg")
-        initial_state = State6DOF.initial(elevation_deg=elev_deg, azimuth_deg=r["azimuth"])
+
+        azimuth_deg = r["azimuth"]
+        if args.azimuth_deg is not None:
+            if args.azimuth_deg.lower() in ("auto", "telemetry", "gps"):
+                azimuth_deg, horiz = estimate_azimuth_from_telemetry(base, fno)
+                print(f"Lot {fno}: azymut z telemetrii (slad GPS zaplon->apogeum) = "
+                      f"{azimuth_deg:.1f} deg (baza {horiz:.0f} m), "
+                      f"configs.txt = {r['azimuth']:.1f} deg")
+            else:
+                azimuth_deg = float(args.azimuth_deg)
+                print(f"Lot {fno}: azymut nadpisany {r['azimuth']:.1f} -> {azimuth_deg:.1f} deg")
+
+        initial_state = State6DOF.initial(elevation_deg=elev_deg, azimuth_deg=azimuth_deg)
 
         prop_flight = build_flight_thrust(base, fno, t_ignition)
         if prop_flight is None:
@@ -467,7 +521,7 @@ def main():
             periods_s = [float(p) for p in args.gust_period_sweep.split(",")]
             model_runs = []
             for period in periods_s:
-                wind = build_wind(base, fno, r["azimuth"], gust_period_s=period)
+                wind = build_wind(base, fno, azimuth_deg, gust_period_s=period)
                 if wind is None:
                     print(f"Lot {fno}: brak zmierzonego wiatru (Open-Meteo) -- pomijam.")
                     model_runs = None
@@ -485,7 +539,7 @@ def main():
             phases_rad = [math.radians(float(p)) for p in args.gust_phase_sweep.split(",")]
             model_runs = []
             for phase in phases_rad:
-                wind = build_wind(base, fno, r["azimuth"],
+                wind = build_wind(base, fno, azimuth_deg,
                                    gust_period_s=args.gust_period_sweep_T, gust_phase_rad=phase)
                 if wind is None:
                     print(f"Lot {fno}: brak zmierzonego wiatru (Open-Meteo) -- pomijam.")
@@ -501,7 +555,7 @@ def main():
             continue
 
         if args.roll_resonance_check:
-            wind = None if args.roll_resonance_no_wind else build_wind(base, fno, r["azimuth"])
+            wind = None if args.roll_resonance_no_wind else build_wind(base, fno, azimuth_deg)
             if not args.roll_resonance_no_wind and wind is None:
                 print(f"Lot {fno}: brak zmierzonego wiatru (Open-Meteo) -- pomijam.")
                 continue
@@ -515,11 +569,11 @@ def main():
         if args.no_wind:
             wind = None
         elif args.gust_pulse:
-            wind = build_wind_pulse(base, fno, r["azimuth"],
+            wind = build_wind_pulse(base, fno, azimuth_deg,
                                      t_center_s=args.gust_pulse_t_center,
                                      sigma_s=args.gust_pulse_sigma)
         else:
-            wind = build_wind(base, fno, r["azimuth"],
+            wind = build_wind(base, fno, azimuth_deg,
                                gust_period_s=args.gust_period_s,
                                gust_phase_rad=math.radians(args.gust_phase_deg))
         if wind is None and not args.no_wind:
@@ -528,7 +582,7 @@ def main():
 
         model = model_time_series(aero, geom, atm, gravity, launcher, mass, prop_flight, initial_state,
                                    wind_model=wind)
-        actual = actual_time_series(base, fno, r["azimuth"], t_burn, elev_deg)
+        actual = actual_time_series(base, fno, azimuth_deg, t_burn, elev_deg)
 
         if args.no_wind:
             suffix = "_nowiatru"
@@ -540,6 +594,8 @@ def main():
                 suffix = f"_T{args.gust_period_s:.1f}_phi{args.gust_phase_deg:.0f}"
         if args.elevation_deg is not None:
             suffix += f"_elev{elev_deg:.0f}"
+        if args.azimuth_deg is not None:
+            suffix += f"_az{azimuth_deg:.0f}"
         plot_flight(fno, model, actual, out_dir / f"trajectory_6dof_flight_{fno}{suffix}.png")
 
 
