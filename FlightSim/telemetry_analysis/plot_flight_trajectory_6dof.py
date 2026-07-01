@@ -364,6 +364,14 @@ def main():
                          help="czas [s] od zaplonu szczytu impulsu (z --gust-pulse)")
     parser.add_argument("--gust-pulse-sigma", type=float, default=2.0,
                          help="szerokosc [s] impulsu gaussowskiego (z --gust-pulse)")
+    parser.add_argument("--elevation-deg", type=float, default=None,
+                         help="nadpisz kat elewacji [deg] z configs.txt (hipoteza: "
+                              "wyrzutnia byla ustawiona pod innym katem niz zapisany -- "
+                              "dla lotu 19 elew=42 odtwarza wysokosc/czas apogeum lepiej "
+                              "niz zapisane 45). Nadpisuje ZAROWNO kat startowy modelu jak "
+                              "i rzut grawitacji w rekonstrukcji predkosci z akcelerometru "
+                              "(a_kin = a_meas - g*sin(elew)) -- oba uzywaja tej samej, "
+                              "prawdziwej elewacji.")
     args = parser.parse_args()
 
     base = get_data_dir()
@@ -398,7 +406,10 @@ def main():
 
         mass = build_scaled_mass(cfg_base, t_ignition, r["m_rocket"])
         atm = create_atmosphere("ISA_LAUNCH", T0_C=r["T_C"], p0_hpa=r["p_hpa"], RH_pct=r["RH_pct"])
-        initial_state = State6DOF.initial(elevation_deg=r["elevation"], azimuth_deg=r["azimuth"])
+        elev_deg = args.elevation_deg if args.elevation_deg is not None else r["elevation"]
+        if args.elevation_deg is not None:
+            print(f"Lot {fno}: elewacja nadpisana {r['elevation']:.1f} -> {elev_deg:.1f} deg")
+        initial_state = State6DOF.initial(elevation_deg=elev_deg, azimuth_deg=r["azimuth"])
 
         prop_flight = build_flight_thrust(base, fno, t_ignition)
         if prop_flight is None:
@@ -468,7 +479,7 @@ def main():
 
         model = model_time_series(aero, geom, atm, gravity, launcher, mass, prop_flight, initial_state,
                                    wind_model=wind)
-        actual = actual_time_series(base, fno, r["azimuth"], t_burn, r["elevation"])
+        actual = actual_time_series(base, fno, r["azimuth"], t_burn, elev_deg)
 
         if args.gust_pulse:
             suffix = f"_pulse_tc{args.gust_pulse_t_center:.1f}_sig{args.gust_pulse_sigma:.1f}"
@@ -476,6 +487,8 @@ def main():
             suffix = ""
             if args.gust_period_s != GUST_PERIOD_S or args.gust_phase_deg != math.degrees(GUST_PHASE_RAD):
                 suffix = f"_T{args.gust_period_s:.1f}_phi{args.gust_phase_deg:.0f}"
+        if args.elevation_deg is not None:
+            suffix += f"_elev{args.elevation_deg:.0f}"
         plot_flight(fno, model, actual, out_dir / f"trajectory_6dof_flight_{fno}{suffix}.png")
 
 
