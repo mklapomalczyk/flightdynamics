@@ -28,6 +28,7 @@ def generate_missile_datcom_input(
     xcg_override: float | None = None,
     body_only:    bool = False,
     roll_only:    bool = False,
+    power_on:     bool = False,
 ) -> Path:
     """
     Generuje plik .inp dla Missile DATCOM na podstawie RocketConfig.
@@ -106,13 +107,21 @@ def generate_missile_datcom_input(
         if taft not in ("CONE", "OGIVE"):
             taft = "CONE"
         l_cyl  = l - l_N - l_aft
-        d_exit = 0.0   # zakładamy że boattail kończy się zamkniętym ogonem
+        d_exit = 0.0   # coast: den zamkniety (pelny opor denny)
     else:
         l_aft  = 0.0
         d_aft  = d
         taft   = "CONE"
         l_cyl  = l - l_N
         d_exit = 0.0
+
+    # Power-on: srednica wylotu dyszy (DEXIT>0) — DATCOM liczy opor denny
+    # tylko na pierscieniu (den minus wylot), bo plomien wypelnia srodek.
+    # Wartosc z konfiguracji (propulsion.nozzle_diameter, dotad ignorowana).
+    # Coast (power_on=False) zostaje przy DEXIT=0 (pelny opor denny).
+    if power_on:
+        nozzle_d = getattr(getattr(cfg, "propulsion", None), "nozzle_diameter", 0.0) or 0.0
+        d_exit = min(float(nozzle_d), d_aft)
 
     lines.append(f" $AXIBOD  X0=0.00,")
     lines.append(f"          TNOSE={nose_type},")

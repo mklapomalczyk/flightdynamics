@@ -164,11 +164,13 @@ class ConstantAero:
         alpha_total: Optional[float] = None,
         beta:        float = 0.0,
         r_rate:      float = 0.0,
+        powered:     bool = False,
     ) -> AeroForces:
 
         # Współczynniki
-        # CA stale (brak tabeli) -> alpha_total nie ma tu wplywu, ale
-        # parametr przyjety dla zgodnosci z TableAero.
+        # CA stale (brak tabeli) -> alpha_total nie ma tu wplywu, ani
+        # rozroznienia powered/coast (brak CA-BASE); parametry przyjete
+        # dla zgodnosci sygnatury z TableAero.
         CA = self.CA
         CN = self.CN_alpha * alpha
 
@@ -302,10 +304,17 @@ class TableAero:
         CYB_table:   Optional[np.ndarray] = None,
         CLL_table:   Optional[np.ndarray] = None,
         xcg_ref:     float = 0.0,
+        CA_base_table: Optional[np.ndarray] = None,
     ):
         self.alpha_table = np.asarray(alpha_table, dtype=float)
         self.mach_table  = np.asarray(mach_table,  dtype=float)
         self.CA_table    = np.asarray(CA_table,    dtype=float)
+        # Opor denny (skladowa CA) — do modelu z napędem: podczas spalania
+        # plomien silnika wypelnia den i opor denny ~0; podczas lotu
+        # balistycznego (coast) obowiazuje pelny opor denny. None -> brak
+        # rozroznienia (zachowanie jak dawniej: pelny CA zawsze).
+        self.CA_base_table = (np.asarray(CA_base_table, dtype=float)
+                              if CA_base_table is not None else None)
         self.CN_table    = np.asarray(CN_table,    dtype=float)
         self.Cm_table    = np.asarray(Cm_table,    dtype=float) if Cm_table  is not None else None
         self.xcp_table   = np.asarray(xcp_table,   dtype=float) if xcp_table is not None else None
@@ -348,6 +357,7 @@ class TableAero:
         alpha_total: Optional[float] = None,
         beta:        float = 0.0,
         r_rate:      float = 0.0,
+        powered:     bool = False,
     ) -> AeroForces:
 
         # Ogranicz alpha do zakresu tabeli — poza nim DATCOM nie ma sensu
@@ -369,6 +379,17 @@ class TableAero:
                              else float(np.clip(alpha_total, alpha_min, alpha_max)))
         CA_x = self._interp(self.CA_table, alpha_total_clip, mach)
         CN_x = self._interp(self.CN_table, alpha_total_clip, mach)
+
+        # Korekcja oporu dennego podczas pracy silnika: plomien wylotowy
+        # wypelnia i doszczelnia den, wiec opor denny (CA-BASE z DATCOM,
+        # liczony dla lotu balistycznego / zamknietego dna) praktycznie
+        # znika. Odejmujemy go od CA (obie osie) tylko gdy powered=True.
+        # Coast (powered=False) -> pelny opor denny, jak dawniej.
+        if powered and self.CA_base_table is not None:
+            ca_base   = self._interp(self.CA_base_table, alpha_clip,       mach)
+            ca_base_x = self._interp(self.CA_base_table, alpha_total_clip, mach)
+            CA   = max(CA   - ca_base,   0.0)
+            CA_x = max(CA_x - ca_base_x, 0.0)
 
         if self.Cm_table is not None:
             Cm_datcom = self._interp(self.Cm_table, alpha_clip, mach)

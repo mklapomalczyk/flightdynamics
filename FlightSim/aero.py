@@ -130,6 +130,7 @@ def _parse_and_cache(out_path, pkl_path, Cmq, out_body_path=None,
         CYB_table   = table.get("CYB"),
         CLL_table   = CLL_table,
         xcg_ref     = float(table["xcg"]),   # xcg uzyte w DATCOM do obliczenia Cm_table
+        CA_base_table = table.get("CA_base"),  # opor denny -> korekta powered/coast
     )
     with open(pkl_path, "wb") as f:
         pickle.dump(aero, f)

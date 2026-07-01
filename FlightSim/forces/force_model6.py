@@ -189,6 +189,7 @@ class ForceModel6DOF:
             alpha_total = alpha_total,
             beta        = beta,
             r_rate      = r,
+            powered     = bool(getattr(ms, "is_burning", False)),
         )
 
         FA_x = aero.FA_x
