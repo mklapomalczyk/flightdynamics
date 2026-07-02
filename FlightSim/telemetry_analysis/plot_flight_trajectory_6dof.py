@@ -56,7 +56,7 @@ from core.state6 import State6DOF
 from imu_reconstruction import detect_ignition
 from diag_drag import detect_events, baro_altitude, calib_acc_scale, smooth_gps_derivative, G0
 from gps_fusion import latlon_to_enu
-from models.wind import PowerLawGustWind, PowerLawGustPulseWind
+from models.wind import PowerLawGustWind, PowerLawGustPulseWind, PowerLawWind
 from analyze_wind_sensitivity import read_measured_wind
 
 from analyze_per_flight_6dof import (
@@ -100,6 +100,24 @@ def build_wind_pulse(base, fno, azimuth_deg, t_center_s=5.0, sigma_s=2.0):
         speed_ref_mps=mw["mean_speed_mps"], dir_from_deg=dir_from_deg, azimuth_deg=azimuth_deg,
         h_ref_m=10.0, alpha_exp=0.16,
         gust_amp=gust_amp, t_center_s=t_center_s, sigma_s=sigma_s,
+    )
+
+
+def build_wind_steady(base, fno, azimuth_deg):
+    """PowerLawWind (BRAK sztucznego podmuchu) z faktycznie zmierzonej
+    SREDNIEJ predkosci/kierunku wiatru dla tego lotu (Open-Meteo) --
+    profil predkosci z wysokoscia (prawo potegowe), ale bez okresu/fazy
+    podmuchu (te sa niezwalidowane, patrz build_wind()/PowerLawGustWind).
+    Do testowania NETTO efektu (weathercocking + dryf w locie
+    balistycznym) realnego, stalego wiatru tego dnia -- bez domieszki
+    niepewnego ksztaltu podmuchu w czasie."""
+    mw = read_measured_wind(base, fno)
+    if mw is None or mw["mean_speed_mps"] <= 0:
+        return None
+    dir_from_deg = (azimuth_deg + mw["rel_az_deg"]) % 360.0
+    return PowerLawWind(
+        speed_ref_mps=mw["mean_speed_mps"], dir_from_deg=dir_from_deg, azimuth_deg=azimuth_deg,
+        h_ref_m=10.0, alpha_exp=0.16,
     )
 
 
@@ -425,6 +443,16 @@ def main():
                          help="wylacz wiatr dla normalnego wykresu trajektorii (model bez "
                               "zadnego wiatru) -- do izolowania efektow aero/elewacji/oporu "
                               "od wplywu wiatru")
+    parser.add_argument("--wind-steady", action="store_true",
+                         help="uzyj PowerLawWind (stala, realnie zmierzona srednia "
+                              "predkosc/kierunek wiatru, profil z wysokoscia, BEZ "
+                              "sztucznego podmuchu/oscylacji) zamiast PowerLawGustWind -- "
+                              "do izolowania NETTO efektu weathercockingu/dryfu od "
+                              "niezwalidowanego ksztaltu podmuchu w czasie, patrz "
+                              "build_wind_steady(). Zalecane razem z domyslnym (NIE "
+                              "'auto') azymutem -- GPS-owy azymut 'auto' juz zawiera "
+                              "znoszenie wiatrem tego lotu, wiec porownywanie z nim "
+                              "wynikow modelu pod tym samym wiatrem byloby okrezne.")
     parser.add_argument("--gust-pulse", action="store_true",
                          help="uzyj PowerLawGustPulseWind (pojedynczy zlokalizowany w "
                               "czasie impuls gaussowski) zamiast sinusoidy trwajacej caly "
@@ -568,6 +596,8 @@ def main():
 
         if args.no_wind:
             wind = None
+        elif args.wind_steady:
+            wind = build_wind_steady(base, fno, azimuth_deg)
         elif args.gust_pulse:
             wind = build_wind_pulse(base, fno, azimuth_deg,
                                      t_center_s=args.gust_pulse_t_center,
@@ -586,6 +616,8 @@ def main():
 
         if args.no_wind:
             suffix = "_nowiatru"
+        elif args.wind_steady:
+            suffix = "_wiatr_staly"
         elif args.gust_pulse:
             suffix = f"_pulse_tc{args.gust_pulse_t_center:.1f}_sig{args.gust_pulse_sigma:.1f}"
         else:
