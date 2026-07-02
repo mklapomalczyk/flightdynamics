@@ -379,10 +379,22 @@ def reconstruct(tel, cal, q0, t_start=0.0, t_end=None, use_ax_roll=True):
     q0   — kwaternion orientacji poczatkowej
     t_start, t_end — zakres czasu do rekonstrukcji (lot wlasciwy)
     use_ax_roll — jesli True i dostepna kolumna AX, uzyj zrekonstruowanego
-                  rolla z high-range czujnika AX zamiast wysyconego gyro_X.
-                  Krytyczne dla lotow z duzym rollem (gyro_X wysyca sie na
-                  ±2000 st/s, a roll siega kilku tys.). Bez tego orientacja
-                  — a wiec trajektoria — jest bledna.
+                  rolla z high-range czujnika AX (reconstruct_roll_from_ax_const_sign
+                  -- STALY znak, patrz jej docstring) zamiast wysyconego
+                  gyro_X. Krytyczne dla lotow z duzym rollem (gyro_X wysyca
+                  sie na ±2000 st/s, a roll siega kilku tys.). Bez tego
+                  orientacja — a wiec trajektoria — jest bledna.
+
+                  UWAGA: wczesniej uzywano reconstruct_roll_from_ax()
+                  (per-probkowa logika "ostatni znany znak"), ktora daje
+                  erratyczna oscylacje +/- w oknie t<~5s po zaplonie
+                  (dokladnie najbardziej dynamiczna faza wznoszenia) --
+                  ZWERYFIKOWANE, ze to byl WYLACZNIE artefakt odzyskiwania
+                  znaku (modul |AX| jest sam w sobie gladki), nie prawdziwa
+                  oscylacja kierunku obrotu. Ten blad wstrzykiwal duzy
+                  blad orientacji dokladnie w oknie najwiekszego
+                  przyspieszenia poprzecznego, kumulujacy sie w reszcie
+                  calkowania kwaternionu.
     """
     if t_end is None:
         t_end = tel.time[-1]
@@ -400,7 +412,7 @@ def reconstruct(tel, cal, q0, t_start=0.0, t_end=None, use_ax_roll=True):
     # Roll: z AX (high-range) jesli dostepny, inaczej gyro_X
     roll_src = None
     if use_ax_roll:
-        roll_src = reconstruct_roll_from_ax(tel, t_start)
+        roll_src = reconstruct_roll_from_ax_const_sign(tel, t_start)
     if roll_src is not None:
         gx = np.radians(roll_src[idx])   # AX juz ma odjety offset/skale
     else:
