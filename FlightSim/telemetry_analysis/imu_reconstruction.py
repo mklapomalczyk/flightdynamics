@@ -82,6 +82,60 @@ def reconstruct_roll_from_ax(tel, t_ignition, sat_threshold=1990.0):
     return roll_rate
 
 
+def reconstruct_roll_from_ax_const_sign(tel, t_ignition, sat_threshold=1990.0,
+                                          sign_ref_t_start=5.0, sign_ref_t_end=8.0):
+    """
+    Wariant reconstruct_roll_from_ax() ze STALYM znakiem zamiast
+    "ostatniego znanego znaku" per-probka.
+
+    Motywacja: |AX_scaled| (modul, PRZED przypisaniem znaku) jest sam w
+    sobie GLADKI i fizycznie sensowny od t~1s po zaplonie (rosnie do
+    szczytu w okolicy burnout, potem monotonicznie opada, plynnie
+    laczac sie z segmentem t>=5s bez nieciaglosci) -- ZWERYFIKOWANE
+    numerycznie dla lotu 19. Pozorna erratyczna oscylacja +/- w
+    reconstruct_roll_from_ax() to WYLACZNIE artefakt kruchej logiki
+    "ostatni znany znak" (gyro_X czesto wysyca sie w tym oknie, a
+    krotkie, zaszumione zejscia ponizej progu wysycenia moga wstrzykiwac
+    falszywe zmiany znaku). Rakieta ze stalym zaklinowaniem pletw nie
+    odwraca kierunku obrotu w trakcie wznoszenia, wiec STALY znak
+    (ustalony tam, gdzie gyro_X jest wiarygodny, tj. w segmencie
+    [sign_ref_t_start, sign_ref_t_end] od zaplonu) jest fizycznie
+    uzasadniony na cala probke.
+
+    Zwraca: roll_rate [st/s] ze stalym znakiem, tej samej dlugosci co
+    tel.time. None jesli brak kolumny AX lub nie da sie ustalic znaku
+    referencyjnego.
+    """
+    ax = tel.raw_columns.get("gyro_ax")
+    if ax is None:
+        return None
+
+    gx = tel.gyro_x
+    t_rel = tel.time - t_ignition
+
+    rest = tel.time < (t_ignition - 0.5)
+    if np.sum(rest) < 5:
+        rest = tel.time < t_ignition
+    ax_offset = np.nanmean(ax[rest]) if np.sum(rest) > 0 else 0.0
+    ax_cal = ax - ax_offset
+
+    notsat = (np.abs(gx) < sat_threshold) & (np.abs(gx) > 100)
+    if np.sum(notsat) > 20:
+        scale = np.nanmedian(np.abs(gx[notsat]) / (np.abs(ax_cal[notsat]) + 1e-9))
+    else:
+        scale = 1.0
+    ax_scaled = np.abs(ax_cal) * scale
+
+    ref_mask = (t_rel >= sign_ref_t_start) & (t_rel < sign_ref_t_end)
+    if np.sum(ref_mask) < 5:
+        return None
+    const_sign = float(np.sign(np.nanmedian(gx[ref_mask])))
+    if const_sign == 0.0:
+        const_sign = 1.0
+
+    return ax_scaled * const_sign
+
+
 def detect_ignition(tel):
     """
     Wykrywa moment zaplonu (start lotu).

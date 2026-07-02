@@ -47,7 +47,7 @@ from models.launcher import LauncherConfig
 from forces.force_model6 import ForceModel6DOF
 from core.solver6 import run_simulation_6dof
 from core.state6 import State6DOF
-from imu_reconstruction import detect_ignition, reconstruct_roll_from_ax
+from imu_reconstruction import detect_ignition, reconstruct_roll_from_ax_const_sign
 from diag_drag import detect_events
 
 from analyze_per_flight_6dof import read_flights, build_flight_thrust, build_scaled_mass
@@ -56,24 +56,28 @@ from plot_flight_trajectory_6dof import (
 )
 
 
-def telemetry_roll_rate(base, fno, t_ign_settle_s=5.0):
-    """Zrekonstruowana predkosc obrotowa z kolumny AX (patrz
-    reconstruct_roll_from_ax) wzgledem zaplonu. Pierwsze t_ign_settle_s
-    sekund po zaplonie sa NIEWIARYGODNE (odzyskiwanie znaku z gyro_X
-    zawodzi gdy gyro_X sam czesto wysyca sie podczas najszybszej fazy
-    spin-up) -- oznaczone osobno, nie ucinane, zeby uzytkownik widzial
-    obie czesci na wykresie."""
+def telemetry_roll_rate(base, fno, t_unreliable_s=0.7):
+    """Zrekonstruowana predkosc obrotowa z kolumny AX -- reconstruct_roll_from_ax_const_sign
+    (STALY znak, ustalony z gyro_X w oknie [5,8]s od zaplonu, zamiast
+    kruchej logiki 'ostatni znany znak' per-probka -- ta ostatnia dawala
+    pozorna, erratyczna oscylacje +/- ktora byla WYLACZNIE artefaktem
+    zawodnosci odzyskiwania znaku przy czestym wysyceniu gyro_X, NIE
+    odzwierciedleniem prawdziwego sygnalu: |AX_scaled| samo w sobie jest
+    gladkie i ciagle od t~1s po zaplonie, ze szczytem w okolicy burnout).
+    Tylko pierwsze t_unreliable_s sekund (rakieta ~w spoczynku na
+    szynie/tuz po starcie, zanim cisnienie dynamiczne zbuduje sygnal
+    powyzej szumu) sa oznaczone jako niepewne."""
     fpath = resolve_data_file(f"ARTEMIDA_{fno}_LOT.txt")
     tel = parse_telemetry(fpath, verbose=False)
     t_ign = detect_ignition(tel)
     i_ign, _, i_apo, i_end = detect_events(tel, t_ign)
-    roll_rate = reconstruct_roll_from_ax(tel, t_ign)
+    roll_rate = reconstruct_roll_from_ax_const_sign(tel, t_ign)
     if roll_rate is None:
         return None
     t_rel = tel.time - t_ign
     seg = slice(i_ign, i_end + 1)
     return dict(t=t_rel[seg], roll_rate=roll_rate[seg],
-                reliable=t_rel[seg] >= t_ign_settle_s)
+                reliable=t_rel[seg] >= t_unreliable_s)
 
 
 def main():
@@ -156,18 +160,19 @@ def main():
         print(f"  model:  max|p|={np.max(np.abs(p_deg_s)):.0f} deg/s "
               f"at t={result.t[np.argmax(np.abs(p_deg_s))]:.2f}s")
         rel = tel_roll["reliable"]
-        print(f"  telemetria (AX, t>=5s): "
-              f"zakres=[{np.nanmin(tel_roll['roll_rate'][rel]):.0f}, "
-              f"{np.nanmax(tel_roll['roll_rate'][rel]):.0f}] deg/s")
+        peak_i = np.nanargmax(np.abs(tel_roll["roll_rate"][rel]))
+        print(f"  telemetria (AX, znak staly): "
+              f"szczyt={tel_roll['roll_rate'][rel][peak_i]:.0f} deg/s "
+              f"at t={tel_roll['t'][rel][peak_i]:.2f}s")
 
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.plot(result.t, p_deg_s, color="tab:blue", lw=1.5,
                 label=f"model 6DOF (Clp x{args.clp_scale:.2f})")
         t_tel, rr = tel_roll["t"], tel_roll["roll_rate"]
         ax.plot(t_tel[~rel], rr[~rel], color="tab:orange", lw=0.8, alpha=0.35,
-                label="telemetria AX (t<5s -- znak niepewny)")
+                label="telemetria AX (t<0.7s -- sygnal ponizej szumu)")
         ax.plot(t_tel[rel], rr[rel], color="tab:orange", lw=1.5,
-                label="telemetria AX (t>=5s -- wiarygodne)")
+                label="telemetria AX (znak staly, ustalony z gyro_X @5-8s)")
         ax.axhline(0, color="gray", lw=0.6)
         ax.set_xlabel("czas od zaplonu [s]")
         ax.set_ylabel("predkosc obrotowa p [deg/s]")
