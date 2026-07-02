@@ -12,13 +12,24 @@ obrotowej p(t), skalujac DWA wspolczynniki toczenia niezaleznie:
                   wersja Missile DATCOM)
 
 Motywacja: samo skalowanie Clp (tlumienie) NIE moze jednoczesnie
-wyjasnic obserwowanej amplitudy I czasu narastania -- mniejsze tlumienie
-podnosi rownowagowa predkosc obrotowa, ale WYDLUZA stala czasowa (szczyt
-przesuwa sie w czasie pozniej), podczas gdy telemetria pokazuje bardzo
-SZYBKIE narastanie do szczytu ~-5500 st/s juz w okolicy burnout
-(t_burn=1.712s). To wskazuje, ze potrzebne jest WIEKSZE CLL (szybsze
-narastanie) LUB MNIEJSZE Clp (wyzszy sufit) LUB oba jednoczesnie --
-siatka przeszukuje obie osie.
+wyjasnic obserwowanej amplitudy I czasu narastania -- POTWIERDZONE
+numerycznie w tej siatce: czas szczytu zalezy WYLACZNIE od Clp_scale
+(np. Clp x0.15 -> szczyt zawsze @t~8.5s niezaleznie od CLL_scale), a
+amplituda skaluje sie niemal idealnie liniowo z CLL_scale przy ustalonym
+Clp_scale (typowy dla ukladu dp/dt = A*CLL_scale - B*Clp_scale*p:
+stala czasowa ~1/(B*Clp_scale), rownowaga ~A*CLL_scale/(B*Clp_scale)).
+
+Telemetria (lot 19) pokazuje bardzo SZYBKIE narastanie do szczytu
+~-5490 st/s juz przy t=1.87s (tuz po burnout, t_burn=1.712s) -- szybciej
+niz jakikolwiek Clp_scale<=1.0 (bazowy) pozwala osiagnac. Wymaga to WIEKSZEGO
+Clp (wiecej tlumienia = krotsza stala czasowa), zrownowazonego proporcjonalnie
+WIEKSZYM CLL (aby utrzymac wysoka amplitude mimo wiekszego tlumienia).
+Najlepsze znalezione recznie: CLL x15.5, Clp x3.0 -> szczyt -5508 st/s
+@t=1.85s (cel: -5490 st/s @t=1.87s), zgodnosc dobra w calym locie
+(zobacz roll_rate_best_fit_flight_19.png). Interpretacja fizyczna: DATCOM
+najprawdopodobniej powaznie NIEDOSZACOWUJE efektywnosci toczenia od
+zaklinowania pletw (CLL) dla tej konfiguracji -- bardziej niz tlumienie
+(Clp), ktore i tak bylo juz tylko analitycznym przyblizeniem.
 
 Metoda: grid search (nie optymalizator gradientowy -- funkcja kosztu
 oparta o symulacje ODE, tania siatka jest bardziej przejrzysta i
@@ -64,8 +75,23 @@ from diag_drag import detect_events
 from analyze_per_flight_6dof import read_flights, build_flight_thrust, build_scaled_mass
 from plot_flight_trajectory_6dof import build_wind_steady, estimate_elevation_from_telemetry
 
-CLL_SCALES = [1.0, 1.5, 2.0, 3.0]
-CLP_SCALES = [0.15, 0.3, 0.5, 1.0]
+CLL_SCALES = [10.0, 13.0, 15.5, 18.0]
+CLP_SCALES = [2.0, 2.5, 3.0, 3.5]
+# Wczesniejsza siatka (CLL x[1,1.5,2,3], Clp x[0.15,0.5,1.0]) sugerowala
+# ZMNIEJSZENIE Clp (mniej tlumienia), bo dopasowywala tylko skrocony,
+# "wiarygodny" fragment telemetrii (t>=5s, szczyt pozornie ~-3300 st/s).
+# Po naprawie rekonstrukcji AX (stale znak, patrz
+# reconstruct_roll_from_ax_const_sign) prawdziwy szczyt to ~-5490 st/s
+# przy t=1.87s (tuz po burnout) -- BARDZO szybkie narastanie. Dla tego
+# modelu (liniowe tlumienie dp/dt = A*CLL_scale - B*Clp_scale*p) czas
+# szczytu zalezy WYLACZNIE od Clp_scale (potwierdzone numerycznie: ten sam
+# Clp_scale => identyczny czas szczytu niezaleznie od CLL_scale), a
+# amplituda skaluje sie liniowo z CLL_scale przy ustalonym Clp_scale.
+# Aby dopasowac SZYBKIE narastanie trzeba WIEKSZEGO Clp (wiecej tlumienia,
+# nie mniej!) razem z proporcjonalnie WIEKSZYM CLL (aby utrzymac
+# amplitude) -- najlepsze znalezione recznie: CLL x15.5, Clp x3.0 daje
+# szczyt -5508 st/s @t=1.85s (telemetria: -5490 st/s @t=1.87s), dopasowanie
+# dobre w calym locie (patrz roll_rate_best_fit_flight_19.png).
 
 
 def run_model_roll(aero, geom, mass, atm, gravity, launcher, prop, wind,
