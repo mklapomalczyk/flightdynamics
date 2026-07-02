@@ -252,7 +252,19 @@ class ForceModel6DOF:
             MA_roll_damp = (Clp_rad * (p * self.geom.d_ref / (2.0 * speed)) *
                             q_dyn * self.geom.S_ref * self.geom.d_ref)
 
-        MA_roll = MA_roll_cant + MA_roll_damp
+        # ---- Stały moment toczący niezależny od zaklinowania (diagnostyka) #
+        # Cl0_manufacturing: opcjonalny atrybut aero (domyślnie 0.0, brak
+        # wpływu na dotychczasowe zachowanie) -- do testowania hipotezy, że
+        # dominujące realne zrodlo toczenia NIE jest proporcjonalne do
+        # cant_angle (np. asymetria silnika/platform, tolerancja produkcyjna
+        # wspolna dla calej floty), patrz check_roll_factors_all_flights.py
+        # i fit_roll_common_torque.py -- loty z cant=0 pokazuja realny roll
+        # porownywalny do lotow z cant!=0, czego czysto cant-driven CLL_table
+        # nie moze wyjasnic.
+        Cl0_manufacturing = getattr(self.aero, 'Cl0_manufacturing', 0.0)
+        MA_roll_const = Cl0_manufacturing * q_dyn * self.geom.S_ref * self.geom.d_ref
+
+        MA_roll = MA_roll_cant + MA_roll_damp + MA_roll_const
 
         # ---- Efekt Magnusa ----------------------------------------------- #
         FA_y_magnus = 0.0
