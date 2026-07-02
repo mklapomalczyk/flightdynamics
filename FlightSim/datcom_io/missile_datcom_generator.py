@@ -19,6 +19,50 @@ import math
 from pathlib import Path
 from datcom_io.config_reader import RocketConfig
 
+# Szerokosc karty (kolumn) dla starego, sztywnego formatu Fortran uzywanego
+# przez Missile DATCOM. Linie dluzsze sa po cichu ucinane/blednie parsowane
+# przez czytnik DATCOM-a (objaw: "** BLANK CARD - IGNORED" / "MISSING
+# NAMELIST TERMINATION ADDED" w datcom.out, mimo poprawnej skladni pliku
+# .inp) -- stad koniecznosc dzielenia dlugich tablic (np. ALPHA z szerokim
+# zakresem katow) na kolejne karty kontynuacji.
+DATCOM_CARD_WIDTH = 80
+
+
+def _wrap_namelist_array(var_name: str, values, value_fmt, indent: str,
+                          max_width: int = DATCOM_CARD_WIDTH) -> list[str]:
+    """
+    Formatuje tablice namelist Fortran (np. ALPHA=1.,2.,3.,...) na jedna
+    lub wiecej fizycznych linii, dzielac dlugie tablice na karty
+    kontynuacji wg formatu Missile DATCOM:
+
+        NALPHA=20., ALPHA=0.,2.,4.,...,18.,20.,
+        ALPHA(12)=22.,24.,...,52.,
+
+    tj. kontynuacja powtarza nazwe zmiennej z indeksem (1-based) pierwszej
+    wartosci na tej karcie w nawiasie, zamiast proby kontynuowania listy
+    bez etykiety (co dla dlugich linii DATCOM po prostu ucina/gubi).
+
+    Nie dodaje koncowego "$" (terminator namelist) -- to robi wywolujacy
+    dla ostatniej zmiennej w danym bloku $NAMELIST.
+    """
+    tokens = [f"{value_fmt(v)}," for v in values]
+    lines = []
+    i = 0
+    n = len(values)
+    while i < n:
+        prefix = f"{indent}{var_name}=" if i == 0 else f"{indent}{var_name}({i + 1})="
+        line = prefix
+        started = False
+        while i < n:
+            tok = tokens[i]
+            if started and len(line) + len(tok) > max_width:
+                break
+            line += tok
+            i += 1
+            started = True
+        lines.append(line)
+    return lines
+
 
 def generate_missile_datcom_input(
     cfg: RocketConfig,
@@ -74,14 +118,22 @@ def generate_missile_datcom_input(
     lines.append("")
 
     # --- $FLTCON ----------------------------------------------------------
+    # MACH/ALPHA dzielone na karty kontynuacji (ALPHA(n)=...) gdy tablica
+    # jest za dluga na jedna linie -- patrz _wrap_namelist_array powyzej
+    # (DATCOM po cichu ucina/gubi wartosci na zbyt dlugich liniach zamiast
+    # zglosic blad, co dawalo NALPHA niezgodne z rzeczywista lista i
+    # "MISSING NAMELIST TERMINATION ADDED" w datcom.out).
     nmach = len(mach_list)
     nalpha = len(alpha_list)
-    mach_str  = ",".join(f"{m:.4f}" for m in mach_list)
-    alpha_str = ",".join(f"{a:.1f}" for a in alpha_list)
 
     lines.append(f" $FLTCON  NALPHA={nalpha}.,NMACH={nmach}.,")
-    lines.append(f"          MACH={mach_str},")
-    lines.append(f"          ALPHA={alpha_str},$")
+
+    mach_lines = _wrap_namelist_array("MACH", mach_list, lambda m: f"{m:.4f}", "          ")
+    lines.extend(mach_lines)
+
+    alpha_lines = _wrap_namelist_array("ALPHA", alpha_list, lambda a: f"{a:.1f}", "          ")
+    alpha_lines[-1] += "$"
+    lines.extend(alpha_lines)
     lines.append("")
 
     # --- $REFQ ------------------------------------------------------------
