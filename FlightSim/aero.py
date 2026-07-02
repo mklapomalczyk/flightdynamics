@@ -7,7 +7,19 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from models.aerodynamics import TableAero
 
 def get_aero_model(case_name, Cmq=-20.0, force_rerun=False, method="barrowman", compute_cmq=True,
-                    compute_roll=True):
+                    compute_roll=False):
+    # compute_roll domyslnie False: $RLLO ROLLQ=1.0,$ (missile_datcom_generator.py)
+    # NIE dziala z ta wersja Missile DATCOM (Rev 3/99) -- zweryfikowane na
+    # locie 19: przebieg z tym namelist produkuje IDENTYCZNA strukture
+    # outputu co zwykly przebieg pelnej konfiguracji (te same sekcje
+    # STATIC AERODYNAMICS/DERIVATIVES PER DEGREE z CNA/CMA/CYB/CLNB/CLLB),
+    # BEZ zadnej sekcji roll-damping/CLLP -- DATCOM po cichu ignoruje ten
+    # namelist (bledna nazwa zmiennej lub $RLLO nie istnieje w tej wersji).
+    # Zostawiono `compute_roll=True` jako opcje (kod generatora/parsera
+    # gotowy, gdyby ktos zweryfikowal poprawna skladnie z podrecznika
+    # Missile DATCOM-97 -- nie mozna tego sprawdzic w tym sandboxie, brak
+    # renderera PDF), ale domyslnie wylaczone, zeby nie marnowac trzeciego
+    # przebiegu DATCOM ktory i tak nic nie daje.
     run_dir = RUNS_DIR / case_name
     run_dir.mkdir(parents=True, exist_ok=True)
     yaml_path = CONFIGS_DIR / f"{case_name}.yaml"
