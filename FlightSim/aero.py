@@ -6,7 +6,8 @@ RUNS_DIR     = PROJECT_ROOT / "datcom_runs"
 sys.path.insert(0, str(PROJECT_ROOT))
 from models.aerodynamics import TableAero
 
-def get_aero_model(case_name, Cmq=-20.0, force_rerun=False, method="barrowman", compute_cmq=True):
+def get_aero_model(case_name, Cmq=-20.0, force_rerun=False, method="barrowman", compute_cmq=True,
+                    compute_roll=True):
     run_dir = RUNS_DIR / case_name
     run_dir.mkdir(parents=True, exist_ok=True)
     yaml_path = CONFIGS_DIR / f"{case_name}.yaml"
@@ -17,7 +18,7 @@ def get_aero_model(case_name, Cmq=-20.0, force_rerun=False, method="barrowman", 
     if method == "barrowman":
         return _get_barrowman(cfg, case_name, run_dir, Cmq, force_rerun)
     elif method == "missile_datcom":
-        return _get_missile_datcom(cfg, case_name, run_dir, Cmq, force_rerun, compute_cmq)
+        return _get_missile_datcom(cfg, case_name, run_dir, Cmq, force_rerun, compute_cmq, compute_roll)
     else:
         raise ValueError(f"Nieznana metoda: '{method}'. Uzyj 'barrowman' lub 'missile_datcom'.")
 
@@ -35,21 +36,25 @@ def _get_barrowman(cfg, case_name, run_dir, Cmq, force_rerun):
     print(f"[aero] Zapisano cache: {pkl_path.name}")
     return aero
 
-def _get_missile_datcom(cfg, case_name, run_dir, Cmq, force_rerun, compute_cmq=True):
+def _get_missile_datcom(cfg, case_name, run_dir, Cmq, force_rerun, compute_cmq=True,
+                         compute_roll=True):
     pkl_path      = run_dir / "aero_table_missile.pkl"
     out_path      = run_dir / "datcom.out"
     out_body_path = run_dir / "datcom_body.out"
+    out_roll_path = run_dir / "datcom_roll.out"
 
     if pkl_path.exists() and not force_rerun:
         print(f"[aero] Missile DATCOM: laduje cache {pkl_path.name}")
         with open(pkl_path, "rb") as f:
             return pickle.load(f)
 
-    if out_path.exists() and not force_rerun and (not compute_cmq or out_body_path.exists()):
+    if (out_path.exists() and not force_rerun
+            and (not compute_cmq or out_body_path.exists())
+            and (not compute_roll or out_roll_path.exists())):
         print(f"[aero] Missile DATCOM: parsuje istniejace pliki out")
         return _parse_and_cache(out_path, pkl_path, Cmq,
                                 out_body_path if compute_cmq else None,
-                                None, cfg)
+                                out_roll_path if compute_roll else None, cfg)
     from datcom_io.missile_datcom_generator import generate_missile_datcom_input
     from datcom_io.missile_datcom_runner    import run_missile_datcom
 
@@ -67,9 +72,26 @@ def _get_missile_datcom(cfg, case_name, run_dir, Cmq, force_rerun, compute_cmq=T
         run_missile_datcom(inp_body_path, run_dir,
                            output_filename="datcom_body.out")
 
+    # Przebieg 3: pelna konfiguracja + $RLLO (prawdziwy Clp z DATCOM) --
+    # opcjonalny. Bez tego Clp_table jest ZAWSZE analitycznym przyblizeniem
+    # z CNA_fins (patrz _compute_cmq_table), NIGDY prawdziwym tlumieniem
+    # obrotowym z DATCOM -- mimo ze czytnik (missile_datcom_reader.py) i
+    # _parse_and_cache juz obsluguja wczytanie $RLLO CLLP, ta sciezka nigdy
+    # nie byla wywolywana w pipeline uzywanym do walidacji lotow. Znaleziono
+    # podczas analizy lotu 19: telemetria pokazuje predkosc obrotowa
+    # nasycona na suficie czujnika (2000 deg/s) przez ~8s i nadal
+    # 1300-2000 deg/s w fazie balistycznej, znaczaco powyzej modelu
+    # (~850-900 deg/s) -- analityczny Clp jest glownym podejrzanym.
+    if compute_roll:
+        inp_roll_path = run_dir / "for005_roll.dat"
+        print(f"[aero] Missile DATCOM: przebieg 3 — pelna konfiguracja + $RLLO (Clp)")
+        generate_missile_datcom_input(cfg, inp_roll_path, body_only=False, roll_only=True)
+        run_missile_datcom(inp_roll_path, run_dir,
+                           output_filename="datcom_roll.out")
+
     return _parse_and_cache(out_path, pkl_path, Cmq,
                             out_body_path if compute_cmq else None,
-                            None, cfg)
+                            out_roll_path if compute_roll else None, cfg)
 def _parse_and_cache(out_path, pkl_path, Cmq, out_body_path=None,
                       out_roll_path=None, cfg=None):
     import numpy as np
