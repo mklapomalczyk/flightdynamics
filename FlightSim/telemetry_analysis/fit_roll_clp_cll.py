@@ -64,8 +64,8 @@ from diag_drag import detect_events
 from analyze_per_flight_6dof import read_flights, build_flight_thrust, build_scaled_mass
 from plot_flight_trajectory_6dof import build_wind_steady, estimate_elevation_from_telemetry
 
-CLL_SCALES = [1.0, 2.0, 3.0, 5.0]
-CLP_SCALES = [0.1, 0.2, 0.5, 1.0]
+CLL_SCALES = [1.0, 1.5, 2.0, 3.0]
+CLP_SCALES = [0.15, 0.3, 0.5, 1.0]
 
 
 def run_model_roll(aero, geom, mass, atm, gravity, launcher, prop, wind,
