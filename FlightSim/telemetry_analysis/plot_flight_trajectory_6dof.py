@@ -443,6 +443,13 @@ def main():
                          help="wylacz wiatr dla normalnego wykresu trajektorii (model bez "
                               "zadnego wiatru) -- do izolowania efektow aero/elewacji/oporu "
                               "od wplywu wiatru")
+    parser.add_argument("--cll-scale", type=float, default=1.0,
+                         help="mnoznik na CLL_table (moment tworczy od zaklinowania pletw, "
+                              "realny DATCOM) -- np. 15.5, znalezione dopasowanie predkosci "
+                              "obrotowej dla lotu 19, patrz fit_roll_clp_cll.py")
+    parser.add_argument("--clp-scale", type=float, default=1.0,
+                         help="mnoznik na Clp_table (tlumienie toczenia, analityczne "
+                              "przyblizenie) -- np. 3.0, jw.")
     parser.add_argument("--wind-steady", action="store_true",
                          help="uzyj PowerLawWind (stala, realnie zmierzona srednia "
                               "predkosc/kierunek wiatru, profil z wysokoscia, BEZ "
@@ -511,6 +518,12 @@ def main():
         t_burn = cfg_base.propulsion.t_burn
 
         aero, _ = get_aero_for_cant(case, r["cant"], force_rerun=not args.no_rerun_datcom)
+        if args.cll_scale != 1.0 and aero.CLL_table is not None:
+            aero.CLL_table = aero.CLL_table * args.cll_scale
+            print(f"Lot {fno}: CLL_table przeskalowany x{args.cll_scale:.2f}")
+        if args.clp_scale != 1.0 and aero.Clp_table is not None:
+            aero.Clp_table = aero.Clp_table * args.clp_scale
+            print(f"Lot {fno}: Clp_table przeskalowany x{args.clp_scale:.2f}")
         geom = build_geometry(load_config(str(root / "configurations" / f"{case}.yaml")))
         geom.cant_angle_rad = math.radians(r["cant"])
 
@@ -628,6 +641,10 @@ def main():
             suffix += f"_elev{elev_deg:.0f}"
         if args.azimuth_deg is not None:
             suffix += f"_az{azimuth_deg:.0f}"
+        if args.cll_scale != 1.0:
+            suffix += f"_cll{args.cll_scale:.1f}"
+        if args.clp_scale != 1.0:
+            suffix += f"_clp{args.clp_scale:.1f}"
         plot_flight(fno, model, actual, out_dir / f"trajectory_6dof_flight_{fno}{suffix}.png")
 
 
