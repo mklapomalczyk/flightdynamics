@@ -103,21 +103,26 @@ def build_wind_pulse(base, fno, azimuth_deg, t_center_s=5.0, sigma_s=2.0):
     )
 
 
-def build_wind_steady(base, fno, azimuth_deg):
+def build_wind_steady(base, fno, azimuth_deg, alpha_exp=0.16):
     """PowerLawWind (BRAK sztucznego podmuchu) z faktycznie zmierzonej
     SREDNIEJ predkosci/kierunku wiatru dla tego lotu (Open-Meteo) --
     profil predkosci z wysokoscia (prawo potegowe), ale bez okresu/fazy
     podmuchu (te sa niezwalidowane, patrz build_wind()/PowerLawGustWind).
     Do testowania NETTO efektu (weathercocking + dryf w locie
     balistycznym) realnego, stalego wiatru tego dnia -- bez domieszki
-    niepewnego ksztaltu podmuchu w czasie."""
+    niepewnego ksztaltu podmuchu w czasie.
+
+    alpha_exp: wykladnik prawa potegowego V(h)=V_ref*(h/h_ref)^alpha_exp
+    (domyslnie 0.16, otwarty teren). Nadpisywalny -- do testowania hipotezy,
+    ze rzeczywisty wiatr na wysokosci lotu jest silniejszy niz zakladany
+    referencyjny profil (patrz fit_wind_altitude_profile.py)."""
     mw = read_measured_wind(base, fno)
     if mw is None or mw["mean_speed_mps"] <= 0:
         return None
     dir_from_deg = (azimuth_deg + mw["rel_az_deg"]) % 360.0
     return PowerLawWind(
         speed_ref_mps=mw["mean_speed_mps"], dir_from_deg=dir_from_deg, azimuth_deg=azimuth_deg,
-        h_ref_m=10.0, alpha_exp=0.16,
+        h_ref_m=10.0, alpha_exp=alpha_exp,
     )
 
 
