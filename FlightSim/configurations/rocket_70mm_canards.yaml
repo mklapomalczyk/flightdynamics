@@ -1,0 +1,131 @@
+# configurations/rocket_70mm_baseline.yaml
+# ==========================================
+# Konfiguracja rakiety 70mm — parametry geometryczne i masowe
+# Jednostki: metry [m], stopnie [deg], kilogramy [kg], niutony [N]
+# Skrypt automatycznie przelicza na stopy dla DATCOM.
+
+name: rocket_70mm_canards
+
+# ---- Warunki lotu dla DATCOM ----------------------------------------- #
+flight_conditions:
+  mach:  [0.1, 0.2, 0.3, 0.4, 0.8, 0.9, 1.0, 1.1, 2.3]   # liczby Macha
+  alpha: [-10.0, -8.0, -6.0, -4.0, -2.0,   # kąty natarcia [deg]
+           0.0, 2.0, 4.0, 6.0, 8.0, 10.0]
+  altitude: 1000.0   # wysokość referencyjna [m] — do liczby Reynoldsa
+
+# ---- Korpus ---------------------------------------------------------- #
+body:
+  length:       1.285   # całkowita długość korpusu [m]
+  diameter:     0.070   # średnica maksymalna [m]
+
+  nose:
+    type:   ogive       # ogive | cone | karman | haack
+    length: 0.225       # długość nosa [m]
+ 
+ # Zwężenie ogona (boattail) — opcjonalne
+  boattail:
+    diameter: 0.052    # średnica ogona [m]
+    length:   0.044    # długość zwężenia [m]
+    type:     cone     # cone | ogive
+  # Opcjonalnie: przekroje poprzeczne wzdłuż osi X
+  # Jeśli nie podane — DATCOM zakłada walec z nosem
+  # sections:
+  #   x: [0.0, 0.10, 0.20, 0.25, 1.20]   # [m] od nosa
+  #   r: [0.0, 0.02, 0.03, 0.035, 0.035] # promień [m]
+
+# ---- Płetwy (fin set) ------------------------------------------------ #
+# Można podać wiele zestawów płetw (np. przednie i tylne)
+fins:
+  - name: main_fins
+    count:        4         # liczba płetw
+    position:     1.160     # x pozycji natarcia nasady od nosa [m]
+    span:         0.0575    # rozpiętość (od korpusu do końca) [m]
+    root_chord:   0.120     # cięciwa nasady [m]
+    tip_chord:    0.081     # cięciwa końca [m]
+    sweep_le:     35.0      # kąt skosu krawędzi natarcia [deg]
+    cant_angle:   1.2       # kąt zaklinowania płetw [deg]
+    thickness:    0.002     # grubość płetwy [m]
+    profile:      hex       # hex | naca | wedge
+
+# ---- Powierzchnie sterowe -------------------------------------------- #
+# Canardy — sterowanie aerodynamiczne. Generator DATCOM zamienia je na
+# dodatkowy $FINSET (uporzadkowany od nosa, wiec canardy = $FINSET1,
+# pletwy ogonowe = $FINSET2), a wychylenie zadaje przez DELTA1 w $DEFLCT.
+control_surfaces:
+  - name:     canards
+    count:    4         # uklad krzyzowy, PHIF = 0/90/180/270
+    position: 0.150     # x od nosa [m] — przed srodkiem ciezkosci (0.71)
+    span:     0.040
+    root_chord: 0.060
+    tip_chord:  0.020
+    sweep_le:   20.0
+    deflection: 0.0     # wychylenie referencyjne [deg]
+    thickness:  0.002
+    cant_angle: 0.0     # canardy bez zaklinowania
+
+# ---- Sterowanie (modul control/) ------------------------------------- #
+control:
+  delta_sweep_deg: [-10.0, -8.0, -6.0, -4.0, -2.0,
+                    0.0, 2.0, 4.0, 6.0, 8.0, 10.0]
+  # Zakres uznawany za liniowy przy dopasowaniu pochodnych sterowania.
+  linear_fit_range_deg: 6.0
+
+# ---- Masa i środek ciężkości ----------------------------------------- #
+# xcg_ref: wartość referencyjna dla DATCOM (np. xcg przy pustym)
+# Model dynamiki używa xcg(t) z mass_model — nie z tego pliku
+mass:
+  xcg_ref:  0.71    # xcg referencyjne od nosa [m] — dla DATCOM
+  # xcg_full: 0.773   # opcjonalnie: xcg z paliwem (informacyjnie)
+  # xcg_empty: 0.71  # opcjonalnie: xcg bez paliwa (informacyjnie)
+
+# ---- Model masowy ---------------------------------------------------- #
+# Parametry dla stanu z paliwem (full) i bez paliwa (empty).
+# Model dynamiki liniowo interpoluje między nimi w czasie spalania.
+mass_model:
+  # Stan z paliwem (t = 0, zapłon)
+  full:
+    mass:   4.200     # masa całkowita [kg]
+    xcg:    0.773     # środek masy od nosa [m]
+    Iyy:    0.646     # moment bezwładności pitch/yaw [kg·m²]
+    Ixx:    0.0032    # moment bezwładności roll [kg·m²]
+ 
+  # Stan bez paliwa (t = t_burn, burnout)
+  empty:
+    mass:   3.430     # masa bez paliwa [kg]
+    xcg:    0.710     # środek masy od nosa [m]
+    Iyy:    0.532     # moment bezwładności pitch/yaw [kg·m²]
+    Ixx:    0.0028     # moment bezwładności roll [kg·m²]
+ 
+# ---- Profil ciągu ---------------------------------------------------- #
+# Tabela ciąg-czas od momentu zapłonu (t=0).
+# Przed pierwszym punktem: symulacja nie jest uruchamiana.
+# Po ostatnim punkcie: ciąg = 0.
+# Minimalna tabela: dwa punkty (prostokątny profil ciągu).
+propulsion:
+  nozzle_diameter: 0.040   # średnica dyszy [m] — do obliczenia oporu dennego
+  # Profil ciągu z testów polowych (20 pkt): srednia T(t/t_burn) z 6 lotow
+  # (13,14,17,18,19,20 — lot 21 wylaczony, zla kalibracja R2=0.008),
+  # przeskalowana na sredni czas spalania t_burn=1.712s.
+  # Patrz: telemetry_analysis/estimate_thrust.py, results/thrust_mean_std.csv
+  thrust_profile:
+    #  t [s]   F [N]
+    - [0.0000,  649.30]
+    - [0.0901,  634.44]
+    - [0.1802,  663.59]
+    - [0.2703,  710.12]
+    - [0.3604,  754.98]
+    - [0.4505,  814.59]
+    - [0.5406,  875.28]
+    - [0.6307,  939.24]
+    - [0.7208, 1008.60]
+    - [0.8109, 1071.56]
+    - [0.9011, 1132.11]
+    - [0.9912, 1189.06]
+    - [1.0813, 1239.32]
+    - [1.1714, 1308.10]
+    - [1.2615, 1374.13]
+    - [1.3516, 1420.41]
+    - [1.4417, 1460.61]
+    - [1.5318, 1352.55]
+    - [1.6219,  711.89]
+    - [1.7120,   27.42]

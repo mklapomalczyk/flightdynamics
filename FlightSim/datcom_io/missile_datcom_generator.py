@@ -64,6 +64,32 @@ def _wrap_namelist_array(var_name: str, values, value_fmt, indent: str,
     return lines
 
 
+def _effective_fin_sets(cfg: RocketConfig, include_controls: bool = True):
+    """
+    Laczy pletwy pasywne (cfg.fins) i powierzchnie sterowe (cfg.control_surfaces)
+    w jedna liste zestawow $FINSETn.
+
+    DATCOM nie zna pojecia "powierzchnia sterowa" — kazdy zestaw paneli to
+    $FINSETn, a sterowanie zadaje sie przez DELTAn. Zestawy MUSZA byc
+    uporzadkowane od nosa do ogona, wiec canardy (x~0.15) staja sie $FINSET1,
+    a pletwy ogonowe (x~1.16) $FINSET2.
+
+    Zwraca (lista [(fin_like, is_control)], lista 1-based indeksow sterowych).
+    Indeksy zwracamy jawnie, zeby nigdzie nie zakladac na sztywno, ze
+    "canardy to zestaw 1".
+    """
+    items = [(f, False) for f in cfg.fins]
+    if include_controls:
+        items += [(cs, True) for cs in getattr(cfg, "control_surfaces", [])]
+
+    # DATCOM przyjmuje maksymalnie 4 zestawy ($FINSET1..4).
+    items.sort(key=lambda it: float(it[0].position))
+    items = items[:4]
+
+    ctrl_indices = [i for i, (_, is_ctrl) in enumerate(items, start=1) if is_ctrl]
+    return items, ctrl_indices
+
+
 def generate_missile_datcom_input(
     cfg: RocketConfig,
     output_path: str | Path,
@@ -73,6 +99,9 @@ def generate_missile_datcom_input(
     body_only:    bool = False,
     roll_only:    bool = False,
     power_on:     bool = False,
+    include_controls: bool = True,
+    emit_gam:     bool = False,
+    delta_cases:  list[dict] | None = None,
 ) -> Path:
     """
     Generuje plik .inp dla Missile DATCOM na podstawie RocketConfig.
@@ -192,8 +221,9 @@ def generate_missile_datcom_input(
     # --- $FINSETn + $DEFLCT --------------------------------------- #
     if not body_only:
         deflect_lines = []
-    
-        for i, fin in enumerate(cfg.fins[:2], start=1):
+        eff_sets, ctrl_indices = _effective_fin_sets(cfg, include_controls=include_controls)
+
+        for i, (fin, _is_ctrl) in enumerate(eff_sets, start=1):
             # XLE — pozycja krawędzi natarcia
             # XLE_tip = XLE_root + span * tan(sweep_le)
             xle_root = fin.position
@@ -220,8 +250,14 @@ def generate_missile_datcom_input(
             lines.append(f"          CHORD={fin.root_chord:.4f},{fin.tip_chord:.4f},")
             lines.append(f"          LER=2*0.0,")
             lines.append(f"          PHIF={phif_str},")
-            # GAM — diedra płetwy [deg] = kąt zaklinowania, generuje CLL
-            if hasattr(fin, "cant_angle") and abs(fin.cant_angle) > 0.001:
+            # GAM (diedra) — USUNIETE. Wczesniej kat zaklinowania byl zapisywany
+            # DWUKROTNIE: jako GAM= ORAZ jako DELTA= w $DEFLCT, wiec DATCOM
+            # widzial ~2x zamierzone zaklinowanie. Wedlug podrecznika $DEFLCT
+            # ustala "the incidence angle for each panel in each fin set" — to
+            # wlasciwe miejsce na zaklinowanie. Zostawiamy je wylacznie w DELTA.
+            # emit_gam=True odtwarza stare (bledne) zachowanie do porownania,
+            # patrz tests/test_gam_baseline_compare.py.
+            if emit_gam and abs(getattr(fin, "cant_angle", 0.0)) > 0.001:
                 gam_str = ",".join([f"{fin.cant_angle:.4f}"] * npanel)
                 lines.append(f"          GAM={gam_str},")
             lines.append(f"          SECTYP=HEX,")
@@ -230,30 +266,71 @@ def generate_missile_datcom_input(
             lines.append(f"          LFLATU=0.2,0.2,$")
             lines.append("")
     
-            # Kąty wychylenia — domyślnie 0
-            # DELTA = cant_angle (zaklinowanie) + delta_control (sterowanie=0)
+            # DELTA = zaklinowanie (cant) — wychylenie sterowania dokladane
+            # osobno per przypadek (patrz delta_cases nizej).
             cant = float(getattr(fin, "cant_angle", 0.0))
             delta_str = ",".join([f"{cant:.4f}"] * npanel)
             deflect_lines.append(f"          DELTA{i}={delta_str},")
-    
+
         # --- $DEFLCT ----------------------------------------------------------
-        if cfg.fins:
+        # XHINGE musi miec tyle wpisow ile jest zestawow pletw — liczone z TEJ
+        # SAMEJ listy co $FINSETn. Wczesniej brane z osobnego cfg.fins[:2], co
+        # przy dolozeniu canardow dawalo niezgodna liczbe wpisow i blad parsowania
+        # $DEFLCT po stronie DATCOM.
+        if eff_sets:
             xhinge_str = ",".join(
                 f"{fin.position + fin.root_chord * 0.75:.4f}"
-                for fin in cfg.fins[:2]
+                for fin, _ in eff_sets
             )
-            lines.append(" $DEFLCT  " + deflect_lines[0].strip() if deflect_lines else "")
-            for dl in deflect_lines[1:]:
-                lines.append("         " + dl.strip())
-            lines.append(f"          XHINGE={xhinge_str},$")
+            if deflect_lines:
+                lines.append(" $DEFLCT  " + deflect_lines[0].strip())
+                for dl in deflect_lines[1:]:
+                    lines.append("          " + dl.strip())
+                lines.append(f"          XHINGE={xhinge_str},$")
         lines.append("")
-    
+
     # $RLLO — roll rate derivatives (Clp)
     if roll_only:
         lines.append(" $RLLO   ROLLQ=1.0,$")
         lines.append("")
     lines.append("PART")
-    lines.append("NEXT CASE")
+
+    # --- Sweep wychylen: przypadki "stacked" (SAVE / NEXT CASE) ------------ #
+    # Podrecznik Missile DATCOM, rozdz. 3.3 + Figure 16: karta SAVE zachowuje
+    # namelisty poprzedniego przypadku, wiec kolejne przypadki podaja TYLKO
+    # $DEFLCT. Jeden przebieg DATCOM zamiast N — i geometria jest z definicji
+    # identyczna we wszystkich przypadkach (nie moga sie "rozjechac").
+    if delta_cases and not body_only:
+        n_panels_of = {i: int(f.count) for i, (f, _) in enumerate(eff_sets, start=1)}
+        cant_of     = {i: float(getattr(f, "cant_angle", 0.0))
+                       for i, (f, _) in enumerate(eff_sets, start=1)}
+        xhinge_str = ",".join(
+            f"{fin.position + fin.root_chord * 0.75:.4f}" for fin, _ in eff_sets
+        )
+        lines.append("SAVE")
+        lines.append("NEXT CASE")
+        for case in delta_cases:
+            label = str(case.get("label", "DEFLECTION CASE"))[:60]
+            per_set = case.get("delta", {})     # {idx_zestawu: [delta per panel]}
+            lines.append(f"CASEID {label}")
+            dl_lines = []
+            for idx in sorted(n_panels_of):
+                npan = n_panels_of[idx]
+                ctrl = per_set.get(idx, [0.0] * npan)
+                if len(ctrl) != npan:
+                    raise ValueError(
+                        f"delta_cases: zestaw {idx} ma {npan} paneli, podano {len(ctrl)}")
+                # Calkowita incydencja panelu = zaklinowanie + wychylenie sterowania
+                tot = [cant_of[idx] + float(c) for c in ctrl]
+                dl_lines.append(f"DELTA{idx}=" + ",".join(f"{v:.4f}" for v in tot) + ",")
+            lines.append(" $DEFLCT  " + dl_lines[0])
+            for dl in dl_lines[1:]:
+                lines.append("          " + dl)
+            lines.append(f"          XHINGE={xhinge_str},$")
+            lines.append("PART")
+            lines.append("NEXT CASE")
+    else:
+        lines.append("NEXT CASE")
 
     output_path.write_text("\n".join(lines), encoding="ascii")
     print(f"[MissileDatcom] Wygenerowano: {output_path}")

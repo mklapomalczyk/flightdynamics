@@ -66,6 +66,14 @@ class FinSet:
 
 @dataclass
 class ControlSurface:
+    """
+    Powierzchnia sterowa (np. canardy).
+
+    Geometrycznie zachowuje sie jak FinSet — generator DATCOM zamienia ja na
+    dodatkowy $FINSET (patrz missile_datcom_generator._effective_fin_sets),
+    bo DATCOM nie ma osobnego pojecia "powierzchni sterowej": kazdy zestaw
+    paneli to $FINSETn, a wychylenie zadaje sie przez DELTAn w $DEFLCT.
+    """
     name:       str
     count:      int
     position:   float
@@ -73,10 +81,15 @@ class ControlSurface:
     root_chord: float
     tip_chord:  float
     sweep_le:   float
-    deflection: float = 0.0
+    deflection: float = 0.0   # wychylenie referencyjne [deg]
+    thickness:  float = 0.002
+    profile:    str   = "hex"
+    cant_angle: float = 0.0   # canardy zwykle bez zaklinowania
+    # Zarezerwowane na przyszlosc — mapowanie kanalow sterowania na panele.
+    # v1 uzywa standardowych wzorcow krzyzowych z control/derivatives.py.
+    channel_map: Optional[dict] = None
 
 
-@dataclass
 @dataclass
 class DualSpinSection:
     """Parametry jednej sekcji rakiety dual-spin."""
@@ -226,6 +239,10 @@ def load_config(yaml_path: Path) -> RocketConfig:
             tip_chord  = float(cs["tip_chord"]),
             sweep_le   = float(cs["sweep_le"]),
             deflection = float(cs.get("deflection", 0.0)),
+            thickness  = float(cs.get("thickness", 0.002)),
+            profile    = cs.get("profile", "hex"),
+            cant_angle = float(cs.get("cant_angle", 0.0)),
+            channel_map= cs.get("channel_map", None),
         ))
 
     # ---- Mass --------------------------------------------------------- #
