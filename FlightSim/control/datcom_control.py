@@ -224,27 +224,40 @@ def build_control_derivatives(out_path,
 
             worst_r2, worst_dev, all_r2 = 1.0, 0.0, []
             worst_cell = (None, None)
+            n_below = 0
             for ia in range(n_a):
                 for im in range(n_m):
                     slope, info = fit_derivative_from_sweep(
                         d_use, stack[:, ia, im], linear_range_deg)
                     tables[field][ia, im] = slope
+                    # Komorki ponizej rozdzielczosci wydruku DATCOM wykluczamy
+                    # ze statystyk R^2 — tam R^2 nie mierzy nieliniowosci, tylko
+                    # kwantyzacje (patrz fit_derivative_from_sweep).
+                    if info["below_resolution"]:
+                        n_below += 1
+                        continue
                     all_r2.append(info["r2"])
                     if info["r2"] < worst_r2:
                         worst_r2 = info["r2"]
                         worst_cell = (float(alpha_deg[ia]), float(mach[im]))
                     worst_dev = max(worst_dev, info["max_dev_full_sweep"])
             fit_info[field] = {"worst_r2": worst_r2,
-                               "median_r2": float(np.median(all_r2)),
+                               "median_r2": float(np.median(all_r2)) if all_r2 else float("nan"),
                                "worst_cell_alpha_mach": worst_cell,
+                               "n_below_resolution": n_below,
+                               "n_cells": n_a * n_m,
                                "max_dev_full_sweep": worst_dev,
                                "n_delta": int(len(d_use)),
                                "delta_range_deg": [float(d_use.min()), float(d_use.max())]}
             if verbose:
-                wc = fit_info[field]["worst_cell_alpha_mach"]
+                fi = fit_info[field]
+                wc = fi["worst_cell_alpha_mach"]
+                nb = (f"  [{fi['n_below_resolution']}/{fi['n_cells']} komorek "
+                      f"ponizej rozdzielczosci DATCOM]"
+                      if fi["n_below_resolution"] else "")
                 print(f"[ctrl] {field:9s} z {key:4s}: R^2 mediana="
-                      f"{fit_info[field]['median_r2']:.4f} min={worst_r2:.4f}"
-                      f" @(alpha={wc[0]}, M={wc[1]})  max_dev={worst_dev:.5f}")
+                      f"{fi['median_r2']:.4f} min={worst_r2:.4f}"
+                      f" @(alpha={wc[0]}, M={wc[1]})  max_dev={worst_dev:.5f}{nb}")
 
     tab = ControlDerivTable(
         alpha_rad=np.deg2rad(alpha_deg), mach=mach,

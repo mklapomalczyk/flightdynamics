@@ -92,7 +92,9 @@ class ControlDerivTable:
 
 def fit_derivative_from_sweep(delta_deg: np.ndarray,
                               coeff: np.ndarray,
-                              linear_range_deg: float = 6.0):
+                              linear_range_deg: float = 6.0,
+                              quantization: float = 1e-3,
+                              min_range_steps: float = 3.0):
     """
     Dopasowuje pochodna d(coeff)/d(delta) [1/rad] ze sweepa wychylen.
 
@@ -100,6 +102,14 @@ def fit_derivative_from_sweep(delta_deg: np.ndarray,
     liniowosci zamiast je przyjmowac: dopasowanie robimy tylko w zakresie
     +/- linear_range_deg, a jako diagnostyke zwracamy R^2 oraz maksymalne
     odchylenie od prostej na CALYM sweepie.
+
+    PONIZEJ ROZDZIELCZOSCI: DATCOM drukuje wspolczynniki z 3 miejscami po
+    przecinku. Gdy skutecznosc sterowania w danej komorce jest bardzo mala,
+    caly sweep zmienia wspolczynnik o jedna-dwie cyfry wydruku. Wtedy R^2 nie
+    ma sensu (SS_tot ~ 0, wiec R^2 leci do zera mimo poprawnych danych) —
+    oznaczamy taka komorke flaga below_resolution zamiast raportowac ja jako
+    nieliniowosc. Przyklad z realnych danych: Cl_delta przy M=2.3 zmienia CLL
+    o 0.001 na calym zakresie +/-10 deg, czyli o JEDEN krok kwantyzacji.
 
     Zwraca (slope_per_rad, info_dict).
     """
@@ -121,6 +131,12 @@ def fit_derivative_from_sweep(delta_deg: np.ndarray,
     pred_all = slope_per_deg * d + intercept
     max_dev = float(np.max(np.abs(c - pred_all))) if len(d) else 0.0
 
+    # Zakres sygnalu na calym sweepie w krokach kwantyzacji wydruku.
+    span = float(np.max(c) - np.min(c)) if c.size else 0.0
+    below_res = bool(span < min_range_steps * quantization)
+
     info = {"r2": r2, "max_dev_full_sweep": max_dev,
-            "intercept": float(intercept), "n_fit": int(mask.sum())}
+            "intercept": float(intercept), "n_fit": int(mask.sum()),
+            "span": span, "span_steps": span / quantization if quantization else np.inf,
+            "below_resolution": below_res}
     return float(slope_per_deg) * (180.0 / np.pi), info

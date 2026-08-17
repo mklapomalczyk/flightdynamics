@@ -179,12 +179,23 @@ else:
     for field, info in (tab.fit_info or {}).items():
         r2 = info.get("worst_r2", 1.0)
         med = info.get("median_r2", r2)
+        nb = info.get("n_below_resolution", 0)
+        nc = info.get("n_cells", 0)
+        extra = f"  [{nb}/{nc} ponizej rozdzielczosci]" if nb else ""
         print(f"    {field:9s} R^2: mediana={med:.4f}  najgorsza={r2:.4f}  "
-              f"max_dev(pelny sweep)={info.get('max_dev_full_sweep', 0.0):.5f}")
+              f"max_dev(pelny sweep)={info.get('max_dev_full_sweep', 0.0):.5f}{extra}")
         check(f"{field}: typowa komorka liniowa (mediana R^2>0.99)", med > 0.99,
               f"(mediana={med:.4f})")
-        check(f"{field}: nawet najgorsza komorka sensowna (R^2>0.95)", r2 > 0.95,
-              f"(najgorsza={r2:.4f})")
+        # R^2 sprawdzamy TYLKO na komorkach powyzej rozdzielczosci wydruku
+        # DATCOM — tam gdzie caly sweep miesci sie w 1-2 cyfrach wydruku,
+        # R^2 mierzy kwantyzacje, nie fizyke (patrz fit_derivative_from_sweep).
+        check(f"{field}: najgorsza ROZROZNIALNA komorka sensowna (R^2>0.95)",
+              r2 > 0.95, f"(najgorsza={r2:.4f})")
+        # Wiekszosc tablicy musi byc rozroznialna, inaczej pochodna jest
+        # w praktyce nieznana — to warto wiedziec, a nie przemilczec.
+        if nc:
+            check(f"{field}: wiekszosc komorek rozroznialna (<50% ponizej rozdz.)",
+                  nb < 0.5 * nc, f"({nb}/{nc} ponizej rozdzielczosci)")
 
     # 3. Symetria krzyzowa — kontrola, nie zrodlo danych.
     cm = float(np.mean(np.abs(tab.Cm_delta)))
