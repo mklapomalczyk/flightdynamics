@@ -320,6 +320,12 @@ def generate_missile_datcom_input(
             label = str(case.get("label", "DEFLECTION CASE"))[:60]
             per_set = case.get("delta", {})     # {idx_zestawu: [delta per panel]}
             lines.append(f"CASEID {label}")
+            # $DEFLCT zostal zachowany przez SAVE z poprzedniego przypadku, a
+            # podrecznik (3.2.2) wymaga: "When changing a namelist that has been
+            # saved, the namelist must first be deleted using the delete control
+            # card." Bez tego DATCOM wywala sie w trakcie przebiegu (obserwowany
+            # kod powrotu 0xC00000A1) — deck konczyl sie na 2 przypadkach.
+            lines.append("DELETE DEFLCT")
             dl_lines = []
             for idx in sorted(n_panels_of):
                 npan = n_panels_of[idx]

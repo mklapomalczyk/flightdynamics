@@ -59,7 +59,13 @@ def run_one(name: str, verbose: bool):
     m = RE_RESULT.search(out)
     n_skip = len(RE_SKIP.findall(out))
     if not m:
-        return None, (out.strip().splitlines() or ["brak wyniku"])[-1][:90]
+        # Bez linii "Wynik:" test sie wywrocil. Pokazujemy linie z typem
+        # wyjatku (ostatnia linia tracebacku), a nie ostatnia linie wyjscia —
+        # przy wieloliniowym komunikacie bledu ta ostatnia bywa najmniej istotna.
+        lines = [l.rstrip() for l in out.strip().splitlines() if l.strip()]
+        exc = next((l for l in reversed(lines)
+                    if re.match(r"^\w+(\.\w+)*(Error|Exception)\b", l.strip())), None)
+        return None, (exc or (lines[-1] if lines else "brak wyniku"))[:100]
     return (int(m.group(1)), int(m.group(2)), n_skip, proc.returncode), None
 
 

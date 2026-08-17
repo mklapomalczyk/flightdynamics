@@ -115,8 +115,17 @@ def run_missile_datcom(
     inp_name = Path(inp_path).name
     shutil.copy2(for005, output_dir / inp_name)
 
-    print(f"[MissileDatcom] OK — wyniki: {out_path}")
+    # Kod powrotu sprawdzamy PRZED wypisaniem "OK" — wczesniej komunikat o
+    # sukcesie szedl pierwszy, a ostrzezenie o awarii ginelo pod nim, przez co
+    # crash DATCOM-a wygladal jak udany przebieg (a plik .out byl urwany).
     if proc.returncode != 0:
-        print(f"[MissileDatcom] Ostrzeżenie: kod powrotu = {proc.returncode}")
+        rc = proc.returncode
+        # Windows zwraca kody NTSTATUS jako duze liczby dodatnie (0xC... = blad).
+        hexrc = f" (0x{rc & 0xFFFFFFFF:08X})" if rc > 0xFFFF else ""
+        print(f"[MissileDatcom] *** BLAD: DATCOM zakonczyl sie kodem {rc}{hexrc}")
+        print(f"[MissileDatcom] *** Plik {out_path.name} moze byc NIEKOMPLETNY "
+              f"— sprawdz koncowke pliku i liczbe przypadkow.")
+    else:
+        print(f"[MissileDatcom] OK — wyniki: {out_path}")
 
     return out_path
