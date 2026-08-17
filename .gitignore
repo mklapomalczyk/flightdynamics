@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# Artefakty generowane przez testy (tests/test_3dof_vs_6dof.py zapisuje
+# wykres do CWD przy kazdym uruchomieniu)
+FlightSim/test_3dof_vs_6dof.png
