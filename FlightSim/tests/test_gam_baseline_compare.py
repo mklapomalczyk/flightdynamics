@@ -3,10 +3,21 @@ tests/test_gam_baseline_compare.py
 ===================================
 Test A/B usuniecia GAM z decka DATCOM.
 
-Kat zaklinowania pletw byl zapisywany DWUKROTNIE: jako GAM= (diedra/incydencja
-pletwy) ORAZ jako DELTA= w $DEFLCT, wiec DATCOM widzial ~2x zamierzone
-zaklinowanie. Podrecznik definiuje $DEFLCT jako "the incidence angle for each
-panel in each fin set", wiec zaklinowanie nalezy TAM — GAM zostalo usuniete.
+Stary generator wpisywal cant_angle w DWA rozne pola DATCOM:
+  GAM  ($FINSETn) — wg podrecznika (Table 10) "Dihedral of each fin", czyli
+                    DIEDR: obrot panelu z plaszczyzny promieniowej,
+  DELTA ($DEFLCT) — "the incidence angle for each panel in each fin set",
+                    czyli wlasciwe ZAKLINOWANIE.
+To dwie ROZNE wielkosci, nie dwie kopie tej samej. Pletwy dostawaly wiec
+poprawne zaklinowanie ORAZ nieistniejacy diedr. GAM zostalo usuniete.
+
+WYNIK POMIARU (patrz czesc B): pierwotna hipoteza "zaklinowanie liczone
+podwojnie, CLL ~2x za duze" jest BLEDNA. Wielkosc CLL jest napedzana
+incydencja (DELTA) i praktycznie sie nie zmienila; spurious diedr zmienial
+tylko ZALEZNOSC CLL OD ALPHA, i to zauwazalnie dopiero powyzej |alpha|~15 deg.
+W zakresie |alpha|<=10 deg (czyli tam gdzie lataly walidowane loty) roznica
+jest na poziomie kwantyzacji wydruku DATCOM. Wnioski z walidacji predkosci
+obrotowej pozostaja wiec w mocy.
 
 Test ma dwie czesci:
 
@@ -122,19 +133,41 @@ else:
         rel = float(np.max(np.abs(a - b))) / scale
         print(f"    {key:4s} max |zmiana| / max|z GAM| = {rel*100:7.2f} %")
 
+    check("CN/CM/CA praktycznie bez zmian (GAM to nie jest kat natarcia)",
+          np.allclose(t_no["CN"], t_gm["CN"], atol=5e-3) and
+          np.allclose(t_no["CA"], t_gm["CA"], rtol=0.02))
+
+    # Co GAM naprawde robil.
+    # Podrecznik, Table 10: GAM = "Dihedral of each fin" — DIEDR panelu, czyli
+    # obrot z plaszczyzny promieniowej. To NIE jest zaklinowanie/incydencja;
+    # ta jest DELTA w $DEFLCT ("the incidence angle for each panel").
+    # Stary kod wpisywal cant_angle w OBA pola, wiec pletwy dostawaly poprawne
+    # zaklinowanie PLUS nieistniejacy diedr. Efekt widac nie w wielkosci CLL
+    # (napedza ja incydencja, czyli DELTA — bez zmian), tylko w jego
+    # ZALEZNOSCI OD ALPHA przy duzych katach natarcia.
     a, b = np.asarray(t_no["CLL"]), np.asarray(t_gm["CLL"])
-    moved = not np.allclose(a, b, rtol=1e-6, atol=1e-12)
-    check("CLL SIE ZMIENIL (usuniecie podwojonego zaklinowania)", moved,
-          "— jesli nie, GAM nie wplywal na CLL i hipoteza podwojenia jest bledna")
+    al = np.asarray(t_no["alpha_deg"])
+    lo = np.abs(al) <= 10.0
 
-    if moved:
-        ratio = float(np.max(np.abs(b))) / max(float(np.max(np.abs(a))), 1e-12)
-        print(f"    stosunek max|CLL| (z GAM / bez GAM) = {ratio:.3f}")
-        print("    (blisko 2.0 => zaklinowanie faktycznie liczylo sie podwojnie)")
+    print("\n  CLL (srednia po Mach) — wplyw diedru zalezy od alpha:")
+    for i, A in enumerate(al):
+        mark = "" if lo[i] else "   <- poza zakresem lotu"
+        print(f"    alpha={A:>6.1f}  bez GAM={a[i].mean():+.4f}  "
+              f"z GAM={b[i].mean():+.4f}  d={b[i].mean()-a[i].mean():+.4f}{mark}")
 
-    check("CA praktycznie bez zmian (GAM nie zmienia oporu osiowego)",
-          np.allclose(t_no["CA"], t_gm["CA"], rtol=0.02),
-          "— duza zmiana CA bylaby zaskoczeniem, sprawdz deck")
+    check("CLL bez zmian w zakresie lotu |alpha|<=10 deg",
+          np.max(np.abs(a[lo] - b[lo])) <= 1.05e-3,
+          f"(max|d|={np.max(np.abs(a[lo]-b[lo])):.5f})")
+    check("CLL zmieniony przy duzych alpha (tam dzialal spurious diedr)",
+          np.max(np.abs(a[~lo] - b[~lo])) > np.max(np.abs(a[lo] - b[lo])),
+          "— brak roznicy oznaczalby, ze GAM nie robil nic")
+
+    ratio = float(b.mean()) / float(a.mean())
+    print(f"\n    srednie CLL: bez GAM={a.mean():+.5f}  z GAM={b.mean():+.5f}"
+          f"  (stosunek {ratio:.3f})")
+    check("CLL NIE byl podwojony przez GAM (stosunek daleko od 2.0)",
+          abs(ratio - 2.0) > 0.5,
+          "— stosunek ~2.0 oznaczalby jednak podwojne liczenie zaklinowania")
 
 print("\n" + "=" * 66)
 total = PASS + FAIL
