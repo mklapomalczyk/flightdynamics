@@ -108,6 +108,18 @@ sc = StepCommander(t_step=3.0, amplitude_deg=2.0, channel="d_pitch")
 check("StepCommander: 0 przed skokiem", np.allclose(sc.command(fs0).u, 0.0))
 check("StepCommander: amplituda po skoku", sc.command(fs5).get("d_pitch") == 2.0)
 
+# Impuls 1 s: komenda tylko w [3, 4) s.
+pc = StepCommander(t_step=3.0, amplitude_deg=2.0, channel="d_pitch",
+                   duration_s=1.0)
+g = lambda t: pc.command(FlightState(t=t, q_dyn=1.0e4, mach=0.5, speed=200.0)).get("d_pitch")
+check("impuls: 0 przed t_step", g(2.99) == 0.0)
+check("impuls: amplituda na poczatku", g(3.0) == 2.0)
+check("impuls: amplituda w srodku", g(3.5) == 2.0)
+check("impuls: 0 dokladnie na koncu", g(4.0) == 0.0)
+check("impuls: 0 dlugo po", g(9.0) == 0.0)
+check("impuls: t_end poprawny", pc.t_end == 4.0)
+check("bez duration_s dalej skok trwaly", sc.t_end == float("inf"))
+
 act = PassthroughActuator()
 cmd = sc.command(fs5)
 check("PassthroughActuator: wyjscie == zadanie",
@@ -159,7 +171,7 @@ print("\n3. Neutralnosc: control=None / zerowa komenda")
 r_none = fly(None)
 r_zero = fly(ControlSystem(ZeroCommander(), PassthroughActuator(),
                            [AeroSurfaceEffector(synthetic_table())]))
-r_amp0 = fly(ControlSystem(StepCommander(3.0, 0.0, "d_pitch"),
+r_amp0 = fly(ControlSystem(StepCommander(3.0, 0.0, "d_pitch", duration_s=1.0),
                            PassthroughActuator(),
                            [AeroSurfaceEffector(synthetic_table())]))
 check("control=None vs ZeroCommander: identyczne",
@@ -169,30 +181,45 @@ check("control=None vs amplituda 0: identyczne",
 check("ControlSystem bez efektorow: zerowy wrench",
       np.allclose(ControlSystem(sc, act, []).compute(fs5).M, 0.0))
 
-# --- 4. Test skokowy end-to-end ------------------------------------------
-print("\n4. Skok +2 deg w pitch przy t=3 s")
-r_step = fly(ControlSystem(StepCommander(3.0, +2.0, "d_pitch"),
+# --- 4. Impuls end-to-end: +2 deg od t=3 s przez 1 s ---------------------
+print("\n4. Impuls +2 deg w pitch, t=3..4 s")
+r_step = fly(ControlSystem(StepCommander(3.0, +2.0, "d_pitch", duration_s=1.0),
                            PassthroughActuator(),
                            [AeroSurfaceEffector(synthetic_table(Cm_d=+1.0))]))
 pre = r_step.t < 2.9
-post = r_step.t > 3.1
-check("przed skokiem: trajektoria == bez sterowania",
+during = (r_step.t > 3.1) & (r_step.t < 3.9)
+after = r_step.t > 4.5
+check("przed impulsem: trajektoria == bez sterowania",
       np.allclose(r_step.theta[pre], r_none.theta[pre], atol=1e-9))
 d_theta = np.degrees(r_step.theta[-1] - r_none.theta[-1])
-check("po skoku: theta odchylona od przypadku bez sterowania",
+check("po impulsie: theta trwale odchylona od przypadku bez sterowania",
       abs(d_theta) > 0.5, f"(dtheta={d_theta:.3f} deg)")
-check("po skoku: znak zgodny z +Cm_delta (nos w gore)", d_theta > 0.0,
+check("po impulsie: znak zgodny z +Cm_delta (nos w gore)", d_theta > 0.0,
       f"(dtheta={d_theta:.3f} deg)")
 q_pre = float(np.max(np.abs(r_step.qr[pre])))
-q_post = float(np.max(np.abs(r_step.qr[post])))
-check("po skoku: predkosc katowa pitch rosnie",
-      q_post > q_pre, f"(|q| {q_pre:.4g} -> {q_post:.4g} rad/s)")
+q_dur = float(np.max(np.abs(r_step.qr[during])))
+check("w trakcie impulsu: predkosc katowa pitch rosnie",
+      q_dur > q_pre, f"(|q| {q_pre:.4g} -> {q_dur:.4g} rad/s)")
+
+# Sedno testu impulsowego: po zdjeciu komendy moment znika, ale wywolana
+# zmiana orientacji zostaje (jest calka momentu). Trwaly skok nie odroznilby
+# tych dwoch rzeczy.
+eff_chk = AeroSurfaceEffector(synthetic_table(Cm_d=+1.0))
+cmd_chk = StepCommander(3.0, +2.0, "d_pitch", duration_s=1.0)
+fs_after = FlightState(t=5.0, q_dyn=1.0e4, mach=0.5, speed=200.0)
+u_after = cmd_chk.command(fs_after).u
+check("po impulsie: komenda wraca do zera", np.allclose(u_after, 0.0))
+check("po impulsie: moment sterowania zeruje sie",
+      abs(eff_chk.wrench(u_after, fs_after).My) < 1e-12)
+check("po impulsie: theta NIE wraca do przypadku bez sterowania "
+      "(zmiana orientacji jest trwala)",
+      abs(np.degrees(r_step.theta[after][-1] - r_none.theta[after][-1])) > 0.5)
 check("symulacja zakonczona poprawnie", r_step.status == "ok",
       f"(status={r_step.status})")
 
 # --- 5. Odwrocony znak pochodnej -> odwrocona reakcja ---------------------
 print("\n5. Kontrola: odwrocenie znaku Cm_delta odwraca reakcje")
-r_neg = fly(ControlSystem(StepCommander(3.0, +2.0, "d_pitch"),
+r_neg = fly(ControlSystem(StepCommander(3.0, +2.0, "d_pitch", duration_s=1.0),
                           PassthroughActuator(),
                           [AeroSurfaceEffector(synthetic_table(Cm_d=-1.0))]))
 d_theta_neg = np.degrees(r_neg.theta[-1] - r_none.theta[-1])
