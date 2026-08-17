@@ -307,6 +307,13 @@ def generate_missile_datcom_input(
         xhinge_str = ",".join(
             f"{fin.position + fin.root_chord * 0.75:.4f}" for fin, _ in eff_sets
         )
+        # SAVE MUSI byc w KAZDYM przypadku, nie tylko w pierwszym.
+        # Podrecznik, rozdz. 3.2.2: "The SAVE card saves namelist inputs from one
+        # case to the following case BUT NOT FOR THE ENTIRE RUN" oraz
+        # "If a SAVE control card is not present in a case, all previous case
+        # inputs are deleted."
+        # Z jednym SAVE geometria docierala tylko do przypadku 2, a od 3. w gore
+        # DATCOM kasowal wejscia — w wyniku plik zawieral 2 przypadki zamiast 34.
         lines.append("SAVE")
         lines.append("NEXT CASE")
         for case in delta_cases:
@@ -328,6 +335,7 @@ def generate_missile_datcom_input(
                 lines.append("          " + dl)
             lines.append(f"          XHINGE={xhinge_str},$")
             lines.append("PART")
+            lines.append("SAVE")      # patrz komentarz wyzej — konieczne w kazdym przypadku
             lines.append("NEXT CASE")
     else:
         lines.append("NEXT CASE")

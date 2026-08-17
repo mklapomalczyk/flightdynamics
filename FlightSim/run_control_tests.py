@@ -14,6 +14,7 @@ Uzycie:
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -43,8 +44,15 @@ def run_one(name: str, verbose: bool):
     path = TESTS / name
     if not path.exists():
         return None, f"brak pliku {name}"
+    # Windows: domyslne kodowanie konsoli (cp1250/cp1252) nie obsluguje znakow
+    # uzywanych w testach (Delta, approx, indeks gorny 2, znak tensora), wiec
+    # proces potomny wywracal sie na UnicodeEncodeError przy samym print().
+    # Wymuszamy UTF-8 po obu stronach: PYTHONIOENCODING w potomku i jawne
+    # encoding/errors przy odczycie strumieni.
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
     proc = subprocess.run([sys.executable, str(path)],
-                          capture_output=True, text=True, cwd=str(ROOT))
+                          capture_output=True, text=True, cwd=str(ROOT),
+                          env=env, encoding="utf-8", errors="replace")
     out = proc.stdout + proc.stderr
     if verbose:
         print(out)

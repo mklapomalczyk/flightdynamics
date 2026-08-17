@@ -87,28 +87,47 @@ def build_control_derivatives(out_path,
     from datcom_io.missile_datcom_reader import parse_missile_datcom_cases
 
     groups = parse_missile_datcom_cases(out_path)
+    labels = parse_sweep_labels(out_path)
+    n_lab = len(labels) if labels else 0
+
+    def _diag() -> str:
+        """Diagnostyka — najczestsza przyczyna to urwany deck skladany."""
+        exp = (len(PANEL_PATTERNS) * len(sweep_deg) + 1) if sweep_deg else None
+        s = (f"\n  przypadkow DATCOM w pliku : {len(groups)}"
+             f"\n  etykiet CASEID odczytanych: {n_lab}")
+        if exp:
+            s += f"\n  oczekiwano                : {exp} (1 bazowy + wzorce x sweep)"
+        if len(groups) <= 2:
+            s += ("\n  PRAWDOPODOBNA PRZYCZYNA: karta SAVE musi wystapic w KAZDYM"
+                  "\n  przypadku, nie tylko w pierwszym (podrecznik 3.2.2: 'saves"
+                  "\n  namelist inputs from one case to the following case but not"
+                  "\n  for the entire run'). Bez tego DATCOM kasuje geometrie po"
+                  "\n  drugim przypadku. Przegeneruj deck aktualnym generatorem:"
+                  "\n      python run_control_datcom.py ctrl --run")
+        return s
+
     if len(groups) < 2:
-        raise ValueError(
-            f"{out_path}: znaleziono {len(groups)} przypadkow DATCOM — sweep "
-            f"wychylen wymaga wielu. Czy deck byl skladany (SAVE/NEXT CASE)?")
+        raise ValueError(f"{out_path}: sweep wychylen wymaga wielu przypadkow." + _diag())
 
     base, sweeps = groups[0], groups[1:]
 
     # --- przypisanie przypadkow do (kanal, wychylenie) --------------------- #
-    labels = parse_sweep_labels(out_path)
     if labels is not None and len(labels) == len(sweeps):
         if verbose:
             print(f"[ctrl] przypisanie po CASEID ({len(labels)} przypadkow)")
     else:
+        if labels and len(labels) != len(sweeps):
+            raise ValueError(
+                f"{out_path}: liczba etykiet CASEID ({len(labels)}) nie zgadza "
+                f"sie z liczba przypadkow ({len(sweeps)})." + _diag())
         if sweep_deg is None:
             raise ValueError(
                 "Brak czytelnych etykiet CASEID i brak sweep_deg — nie da sie "
-                "bezpiecznie przypisac przypadkow do kanalow.")
+                "bezpiecznie przypisac przypadkow do kanalow." + _diag())
         labels = [(ch, d) for ch in PANEL_PATTERNS for d in sweep_deg]
         if len(labels) != len(sweeps):
             raise ValueError(
-                f"Fallback pozycyjny nie pasuje: {len(sweeps)} przypadkow w "
-                f"pliku, {len(labels)} oczekiwanych z sweep_deg x wzorce.")
+                f"{out_path}: fallback pozycyjny nie pasuje." + _diag())
         print("[ctrl] OSTRZEZENIE: brak etykiet CASEID — przypisanie POZYCYJNE. "
               "Sprawdz, czy kolejnosc w decku odpowiada PANEL_PATTERNS x sweep.")
 
