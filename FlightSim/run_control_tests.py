@@ -58,6 +58,10 @@ def run_one(name: str, verbose: bool):
         print(out)
     m = RE_RESULT.search(out)
     n_skip = len(RE_SKIP.findall(out))
+    # Nazwy nieudanych asercji — zeby podsumowanie mowilo CO nie przeszlo,
+    # a nie tylko ile. Bez tego kazda porazka wymaga ponownego uruchomienia
+    # pojedynczego testu, zeby w ogole zobaczyc przyczyne.
+    fails = [l.strip() for l in out.splitlines() if "[FAIL]" in l]
     if not m:
         # Bez linii "Wynik:" test sie wywrocil. Pokazujemy linie z typem
         # wyjatku (ostatnia linia tracebacku), a nie ostatnia linie wyjscia —
@@ -66,7 +70,7 @@ def run_one(name: str, verbose: bool):
         exc = next((l for l in reversed(lines)
                     if re.match(r"^\w+(\.\w+)*(Error|Exception)\b", l.strip())), None)
         return None, (exc or (lines[-1] if lines else "brak wyniku"))[:100]
-    return (int(m.group(1)), int(m.group(2)), n_skip, proc.returncode), None
+    return (int(m.group(1)), int(m.group(2)), n_skip, proc.returncode, fails), None
 
 
 def section(title, tests, verbose):
@@ -80,13 +84,15 @@ def section(title, tests, verbose):
             print(f"  {'BLAD':>6}  {name:<30} {err}")
             failed.append(name)
             continue
-        p, n, s, rc = res
+        p, n, s, rc, fails = res
         tot_p += p; tot_n += n; tot_s += s
         status = "OK" if rc == 0 and p == n else "FAIL"
         if status == "FAIL":
             failed.append(name)
         extra = f"  ({s} pominietych)" if s else ""
         print(f"  {status:>6}  {name:<30} {p:>3}/{n:<3} {desc}{extra}")
+        for fl in fails:                      # co konkretnie nie przeszlo
+            print(f"          -> {fl[:150]}")
     return tot_p, tot_n, tot_s, failed
 
 

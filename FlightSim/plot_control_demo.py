@@ -108,10 +108,11 @@ def fly(control, t_max=12.0):
 
 
 # --------------------------------------------------------------------------
-def plot_step_response(table, amp, tstep, tag, show):
+def plot_step_response(table, amp, tstep, dur, tag, show):
     r_off = fly(None)
-    r_on = fly(ControlSystem(StepCommander(tstep, amp, "d_pitch"),
+    r_on = fly(ControlSystem(StepCommander(tstep, amp, "d_pitch", duration_s=dur),
                              PassthroughActuator(), [AeroSurfaceEffector(table)]))
+    t_end = tstep + dur if dur else float("inf")
 
     # Odtworz komende i moment wzdluz trajektorii (do wykresu).
     eff = AeroSurfaceEffector(table)
@@ -119,7 +120,7 @@ def plot_step_response(table, amp, tstep, tag, show):
     atm = create_atmosphere("ISA")
     d_cmd, m_ctrl = [], []
     for i, t in enumerate(r_on.t):
-        d = amp if t >= tstep else 0.0
+        d = amp if (tstep <= t < t_end) else 0.0
         a = atm.at(-r_on.z[i])
         spd = float(r_on.speed[i])
         fs = FlightState(t=t, alpha=float(r_on.alpha[i]), mach=a.mach(spd),
@@ -129,40 +130,49 @@ def plot_step_response(table, amp, tstep, tag, show):
     d_cmd = np.array(d_cmd); m_ctrl = np.array(m_ctrl)
 
     fig, ax = plt.subplots(2, 3, figsize=(16, 8.5))
-    fig.suptitle(f"Modul sterowania — odpowiedz na skok {amp:+.1f} deg "
-                 f"w kanale pitch przy t={tstep:.1f}s  [{tag}]",
+    win = (f"impuls {amp:+.1f} deg, t={tstep:.1f}..{t_end:.1f}s"
+           if dur else f"skok trwaly {amp:+.1f} deg od t={tstep:.1f}s")
+    fig.suptitle(f"Modul sterowania — {win} w kanale pitch  [{tag}]",
                  fontsize=13, fontweight="bold")
+
+    def mark(a):
+        """Zacieniowany czas trwania komendy — widoczny na kazdym panelu."""
+        if dur:
+            a.axvspan(tstep, t_end, color="tab:blue", alpha=0.10,
+                      label="komenda aktywna")
+        else:
+            a.axvline(tstep, color="gray", ls=":", lw=1)
 
     a = ax[0, 0]
     a.plot(r_on.t, d_cmd, "b-", lw=1.6)
-    a.axvline(tstep, color="gray", ls=":", lw=1)
+    mark(a)
     a.set_ylabel("wychylenie [deg]"); a.set_title("1. Komenda -> serwo (passthrough)")
     a.grid(alpha=0.3)
 
     a = ax[0, 1]
     a.plot(r_on.t, m_ctrl, "r-", lw=1.6)
-    a.axvline(tstep, color="gray", ls=":", lw=1); a.axhline(0, color="k", lw=0.6)
+    mark(a); a.axhline(0, color="k", lw=0.6)
     a.set_ylabel("M_ctrl pitch [N*m]"); a.set_title("2. Moment sterowania")
     a.grid(alpha=0.3)
 
     a = ax[0, 2]
     a.plot(r_off.t, np.degrees(r_off.qr), "k--", lw=1.2, label="bez sterowania")
     a.plot(r_on.t, np.degrees(r_on.qr), "b-", lw=1.6, label="ze sterowaniem")
-    a.axvline(tstep, color="gray", ls=":", lw=1)
+    mark(a)
     a.set_ylabel("q [deg/s]"); a.set_title("3. Predkosc katowa pitch")
     a.legend(fontsize=8); a.grid(alpha=0.3)
 
     a = ax[1, 0]
     a.plot(r_off.t, np.degrees(r_off.theta), "k--", lw=1.2, label="bez sterowania")
     a.plot(r_on.t, np.degrees(r_on.theta), "b-", lw=1.6, label="ze sterowaniem")
-    a.axvline(tstep, color="gray", ls=":", lw=1)
+    mark(a)
     a.set_xlabel("czas [s]"); a.set_ylabel("theta [deg]")
     a.set_title("4. Kat pochylenia"); a.legend(fontsize=8); a.grid(alpha=0.3)
 
     a = ax[1, 1]
     a.plot(r_off.t, np.degrees(r_off.alpha), "k--", lw=1.2, label="bez sterowania")
     a.plot(r_on.t, np.degrees(r_on.alpha), "b-", lw=1.6, label="ze sterowaniem")
-    a.axvline(tstep, color="gray", ls=":", lw=1)
+    mark(a)
     a.set_xlabel("czas [s]"); a.set_ylabel("alpha [deg]")
     a.set_title("5. Kat natarcia"); a.legend(fontsize=8); a.grid(alpha=0.3)
 
@@ -272,7 +282,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--amp", type=float, default=2.0, help="amplituda skoku [deg]")
-    ap.add_argument("--tstep", type=float, default=3.0, help="czas skoku [s]")
+    ap.add_argument("--tstep", type=float, default=3.0, help="poczatek komendy [s]")
+    ap.add_argument("--duration", type=float, default=1.0,
+                    help="czas trwania komendy [s]; 0 = skok trwaly")
     ap.add_argument("--show", action="store_true", help="pokaz okna zamiast zapisu")
     args = ap.parse_args()
 
@@ -294,8 +306,9 @@ def main():
         table = synthetic_table()
         tag = "pochodne syntetyczne"
 
-    print("\n1. Odpowiedz skokowa")
-    plot_step_response(table, args.amp, args.tstep, tag, args.show)
+    print("\n1. Odpowiedz na impuls sterowania")
+    dur = args.duration if args.duration > 0 else None
+    plot_step_response(table, args.amp, args.tstep, dur, tag, args.show)
 
     print("\n2. Pochodne sterowania")
     if have_datcom:
