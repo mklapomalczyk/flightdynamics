@@ -50,7 +50,15 @@ from models.launcher import LauncherConfig
 from models.mass6 import ConstantIxx, MassModel6DOF
 
 OUT_DIR = ROOT / "results"
-CTRL_OUT = ROOT / "datcom_runs" / "rocket_70mm_canards" / "datcom_ctrl.out"
+CTRL_DIR = ROOT / "datcom_runs" / "rocket_70mm_canards"
+
+
+def ctrl_outs():
+    """Pliki sweepa: po jednym na kanal, ze zgodnoscia wstecz."""
+    o = sorted(CTRL_DIR.glob("datcom_ctrl_*.out"))
+    if not o and (CTRL_DIR / "datcom_ctrl.out").exists():
+        o = [CTRL_DIR / "datcom_ctrl.out"]
+    return o
 SWEEP = [-10., -8., -6., -4., -2., 0., 2., 4., 6., 8., 10.]
 
 
@@ -184,7 +192,8 @@ def plot_derivatives(show):
     from datcom_io.missile_datcom_reader import parse_missile_datcom_cases
     from control.datcom_control import _coeff_grid, parse_sweep_labels
 
-    tab = build_control_derivatives(CTRL_OUT, sweep_deg=SWEEP,
+    outs = ctrl_outs()
+    tab = build_control_derivatives(outs, sweep_deg=SWEEP,
                                     linear_range_deg=6.0)
     al = np.degrees(tab.alpha_rad)
 
@@ -217,8 +226,8 @@ def plot_derivatives(show):
     print(f"Zapisano: {p}")
 
     # --- kontrola liniowosci: surowy CM wzdluz sweepa + dopasowana prosta --
-    groups = parse_missile_datcom_cases(CTRL_OUT)
-    labels = parse_sweep_labels(CTRL_OUT)
+    groups = parse_missile_datcom_cases(outs[0])
+    labels = parse_sweep_labels(outs[0])
     if labels and len(labels) == len(groups) - 1:
         base, sweeps = groups[0], groups[1:]
         alpha0 = np.asarray(base.cases[0].alpha, float)
@@ -271,15 +280,16 @@ def main():
     print("DEMO MODULU STEROWANIA")
     print("=" * 70)
 
-    have_datcom = CTRL_OUT.exists()
+    outs = ctrl_outs()
+    have_datcom = bool(outs)
     if have_datcom:
-        print(f"Znaleziono {CTRL_OUT.name} — uzywam ZMIERZONYCH pochodnych.")
+        print(f"Znaleziono {[o.name for o in outs]} — uzywam ZMIERZONYCH pochodnych.")
         from control.datcom_control import build_control_derivatives
-        table = build_control_derivatives(CTRL_OUT, sweep_deg=SWEEP,
+        table = build_control_derivatives(outs, sweep_deg=SWEEP,
                                           linear_range_deg=6.0, verbose=False)
         tag = "pochodne z DATCOM"
     else:
-        print(f"Brak {CTRL_OUT.name} — uzywam pochodnych SYNTETYCZNYCH.")
+        print("Brak datcom_ctrl_*.out — uzywam pochodnych SYNTETYCZNYCH.")
         print("(uruchom: python run_control_datcom.py ctrl --run)")
         table = synthetic_table()
         tag = "pochodne syntetyczne"
@@ -291,7 +301,7 @@ def main():
     if have_datcom:
         plot_derivatives(args.show)
     else:
-        print("  pominiete — wymaga datcom_ctrl.out")
+        print("  pominiete — wymaga datcom_ctrl_*.out")
 
     print("\n" + "=" * 70)
     print(f"Wykresy w: {OUT_DIR}")

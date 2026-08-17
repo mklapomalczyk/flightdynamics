@@ -68,28 +68,44 @@ def build_delta_cases(cfg, sweep_deg):
 
 
 def task_ctrl(do_run: bool):
+    """
+    Sweep wychylen — JEDEN DECK NA KANAL, nie jeden na wszystko.
+
+    Zmierzone empirycznie: DATCOM wywala sie (0xC00000A1) po ~20 przypadkach
+    w jednym przebiegu skladanym — pierwszy pelny przebieg konczyl sie w
+    polowie przypadku 21 z 34. Podzial na kanaly daje 12 przypadkow na deck
+    (baza + 11 wychylen), czyli z duzym zapasem ponizej progu, a i tak jest to
+    3 uruchomienia zamiast 33.
+    """
     cfg = load_config(str(ROOT / "configurations" / f"{CANARD_CASE}.yaml"))
     sweep = getattr(cfg, "control_sweep_deg", None) or \
         [-10.0, -8.0, -6.0, -4.0, -2.0, 0.0, 2.0, 4.0, 6.0, 8.0, 10.0]
-    cases, ci = build_delta_cases(cfg, sweep)
+    all_cases, ci = build_delta_cases(cfg, sweep)
 
     run_dir = _runs_dir(CANARD_CASE)
-    deck = run_dir / "for005_ctrl.dat"
-    generate_missile_datcom_input(cfg, deck, delta_cases=cases)
-
     eff, _ = _effective_fin_sets(cfg)
     print(f"\n[ctrl] zestawy pletw (od nosa): "
           f"{[(f.name, round(f.position,3)) for f, _ in eff]}")
     print(f"[ctrl] zestaw sterowy = $FINSET{ci}")
     print(f"[ctrl] sweep: {sweep}")
-    print(f"[ctrl] przypadkow DATCOM: {len(cases)} (+1 bazowy) w JEDNYM decku")
-    print(f"[ctrl] deck: {deck}")
+
+    decks, outs = [], []
+    for chan in PANEL_PATTERNS:
+        cases = [c for c in all_cases if c["label"].lower().startswith(chan)]
+        if not cases:
+            continue
+        deck = run_dir / f"for005_ctrl_{chan}.dat"
+        generate_missile_datcom_input(cfg, deck, delta_cases=cases)
+        decks.append(deck)
+        outs.append(run_dir / f"datcom_ctrl_{chan}.out")
+        print(f"[ctrl] {chan:8s}: {len(cases)} przypadkow (+1 bazowy) -> {deck.name}")
 
     if do_run:
         from datcom_io.missile_datcom_runner import run_missile_datcom
-        run_missile_datcom(deck, run_dir, output_filename="datcom_ctrl.out")
-        print(f"[ctrl] wynik: {run_dir/'datcom_ctrl.out'}")
-    return deck
+        for deck, out in zip(decks, outs):
+            run_missile_datcom(deck, run_dir, output_filename=out.name)
+            print(f"[ctrl] wynik: {out}")
+    return decks
 
 
 def task_gam(do_run: bool):

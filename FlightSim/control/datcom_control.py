@@ -34,6 +34,10 @@ CHANNEL_COEFFS: Dict[str, List[Tuple[str, str]]] = {
 
 _CASEID_RE = re.compile(r"CASEID\s+(D_[A-Z]+)\s+DELTA\s*=\s*([-+]?\d+(?:\.\d+)?)",
                         re.IGNORECASE)
+# Ta sama etykieta, ale juz bez slowa CASEID — tak przepisuje ja DATCOM
+# w naglowku kazdej strony wynikow.
+_LABEL_RE = re.compile(r"(D_[A-Z]+)\s+DELTA\s*=\s*([-+]?\d+(?:\.\d+)?)",
+                       re.IGNORECASE)
 
 
 def _coeff_grid(group, key: str, alpha: np.ndarray, mach: np.ndarray) -> np.ndarray:
@@ -86,9 +90,49 @@ def build_control_derivatives(out_path,
     """
     from datcom_io.missile_datcom_reader import parse_missile_datcom_cases
 
-    groups = parse_missile_datcom_cases(out_path)
-    labels = parse_sweep_labels(out_path)
-    n_lab = len(labels) if labels else 0
+    paths = [out_path] if isinstance(out_path, (str, Path)) else list(out_path)
+
+    groups, base = [], None
+    for p in paths:
+        gs = parse_missile_datcom_cases(p)
+        if not gs:
+            continue
+        # Pierwszy przypadek kazdego pliku to geometria przy wychyleniu 0.
+        # Przy podziale sweepa na kilka przebiegow baza powtarza sie —
+        # bierzemy pierwsza, reszta sluzy jako kontrola spojnosci.
+        if base is None:
+            base = gs[0]
+        groups.extend(gs[1:])
+
+    if base is None:
+        raise ValueError(f"{paths}: nie udalo sie odczytac zadnego przypadku DATCOM")
+
+    # Etykieta CASEID czytana Z KAZDEGO PRZYPADKU (naglowek strony), a nie z
+    # echa wejscia na poczatku pliku. Przy urwanym przebiegu echo zawiera
+    # wszystkie 33 karty, a wynikow jest mniej — wiazanie po echu dawaloby
+    # ciche przesuniecie przypisania.
+    # Odrzucamy przypadki NIEKOMPLETNE (mniej Machow niz baza). Przy crashu
+    # DATCOM ostatni przypadek bywa urwany w polowie — jego brakujace Machy
+    # weszlyby do dopasowania jako zera i po cichu zepsuly nachylenie.
+    n_mach_base = len(base.cases)
+    labels, kept, dropped = [], [], []
+    for g in groups:
+        lbl = g.cases[0].case_label if g.cases else ""
+        m = _CASEID_RE.match("CASEID " + lbl) or _LABEL_RE.match(lbl)
+        if not m:
+            continue
+        if len(g.cases) < n_mach_base:
+            dropped.append((lbl, len(g.cases)))
+            continue
+        labels.append((m.group(1).lower(), float(m.group(2))))
+        kept.append(g)
+    if dropped and verbose:
+        for lbl, n in dropped:
+            print(f"[ctrl] POMIJAM niekompletny przypadek '{lbl}' "
+                  f"({n}/{n_mach_base} Machow) — prawdopodobnie urwany przebieg")
+    if kept:
+        groups = kept
+    n_lab = len(labels)
 
     def _diag() -> str:
         """Diagnostyka — najczestsza przyczyna to urwany deck skladany."""
@@ -109,7 +153,7 @@ def build_control_derivatives(out_path,
     if len(groups) < 2:
         raise ValueError(f"{out_path}: sweep wychylen wymaga wielu przypadkow." + _diag())
 
-    base, sweeps = groups[0], groups[1:]
+    sweeps = groups
 
     # --- przypisanie przypadkow do (kanal, wychylenie) --------------------- #
     if labels is not None and len(labels) == len(sweeps):
@@ -178,21 +222,29 @@ def build_control_derivatives(out_path,
             else:
                 d_use = d_sorted
 
-            worst_r2, worst_dev = 1.0, 0.0
+            worst_r2, worst_dev, all_r2 = 1.0, 0.0, []
+            worst_cell = (None, None)
             for ia in range(n_a):
                 for im in range(n_m):
                     slope, info = fit_derivative_from_sweep(
                         d_use, stack[:, ia, im], linear_range_deg)
                     tables[field][ia, im] = slope
-                    worst_r2 = min(worst_r2, info["r2"])
+                    all_r2.append(info["r2"])
+                    if info["r2"] < worst_r2:
+                        worst_r2 = info["r2"]
+                        worst_cell = (float(alpha_deg[ia]), float(mach[im]))
                     worst_dev = max(worst_dev, info["max_dev_full_sweep"])
             fit_info[field] = {"worst_r2": worst_r2,
+                               "median_r2": float(np.median(all_r2)),
+                               "worst_cell_alpha_mach": worst_cell,
                                "max_dev_full_sweep": worst_dev,
                                "n_delta": int(len(d_use)),
                                "delta_range_deg": [float(d_use.min()), float(d_use.max())]}
             if verbose:
-                print(f"[ctrl] {field:9s} z {key:4s}: R^2(min)={worst_r2:.4f}  "
-                      f"max odchylka od prostej={worst_dev:.5f}")
+                wc = fit_info[field]["worst_cell_alpha_mach"]
+                print(f"[ctrl] {field:9s} z {key:4s}: R^2 mediana="
+                      f"{fit_info[field]['median_r2']:.4f} min={worst_r2:.4f}"
+                      f" @(alpha={wc[0]}, M={wc[1]})  max_dev={worst_dev:.5f}")
 
     tab = ControlDerivTable(
         alpha_rad=np.deg2rad(alpha_deg), mach=mach,

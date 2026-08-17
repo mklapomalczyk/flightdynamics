@@ -43,6 +43,11 @@ class MissileDatcomAero:
     CY:     np.ndarray = field(default_factory=lambda: np.array([]))   # side force [-]
     CLN:    np.ndarray = field(default_factory=lambda: np.array([]))   # yawing moment [-]
     case_id: int = 1     # numer przypadku DATCOM (dla decków SAVE/NEXT CASE)
+    # Tekst karty CASEID przepisany przez DATCOM w naglowku strony, np.
+    # "D_YAW DELTA=+6.0". Wiaze przypadek z kanalem sterowania BEZ polegania
+    # na kolejnosci — istotne, bo przy urwanym przebiegu (crash DATCOM) liczba
+    # przypadkow w pliku nie zgadza sie z liczba kart CASEID w echu wejscia.
+    case_label: str = ""
 
 
 @dataclass
@@ -97,10 +102,20 @@ def parse_missile_datcom_output(output_path, dedupe_by_mach: bool = True) -> Mis
         # skladanych (SAVE / NEXT CASE), gdzie kolejne przypadki powtarzaja te
         # same liczby Macha i inaczej nie da sie ich rozroznic.
         case_id = 1
+        case_label = ""
         for jb in range(i, max(-1, i - 400), -1):
             mcase = re.search(r"MISSILE DATCOM.*CASE\s+(\d+)", lines[jb])
             if mcase:
                 case_id = int(mcase.group(1))
+                # Etykieta CASEID stoi w naglowku strony miedzy linia
+                # "AERODYNAMIC METHODS..." a naglowkiem sekcji.
+                for jl in range(jb + 1, min(jb + 6, len(lines))):
+                    cand = lines[jl].strip()
+                    if (cand and "AERODYNAMIC METHODS" not in cand
+                            and "STATIC AERODYNAMICS" not in cand
+                            and "*****" not in cand and "PAGE" not in cand):
+                        case_label = cand
+                        break
                 break
 
         # Znajdź koniec tej sekcji (następny nagłówek STATIC AERODYNAMICS)
@@ -225,7 +240,7 @@ def parse_missile_datcom_output(output_path, dedupe_by_mach: bool = True) -> Mis
                 CLL   = np.array([r[1] for r in cll_data])  if len(cll_data)  == len(cn_data) else np.zeros(len(cn_data)),
                 CY    = np.array([r[1] for r in cy_data])   if len(cy_data)   == len(cn_data) else np.zeros(len(cn_data)),
                 CLN   = np.array([r[1] for r in cln_data])  if len(cln_data)  == len(cn_data) else np.zeros(len(cn_data)),
-                case_id = case_id,
+                case_id = case_id, case_label = case_label,
                 xcg=xcg, lref=lref, sref=sref,
             ))
         elif not cn_data and (cna_data or cllp_data) and result.cases:
