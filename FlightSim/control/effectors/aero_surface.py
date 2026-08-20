@@ -56,12 +56,42 @@ class AeroSurfaceEffector(Effector):
     def __init__(self, table: ControlDerivTable,
                  S_ref: float | None = None, d_ref: float | None = None,
                  name: str = "canards"):
+        """
+        S_ref / d_ref: MUSZA byc te same, ktorych uzywa pasywna aerodynamika
+        w models/aerodynamics.py (czyli geom.S_ref i geom.d_ref), inaczej
+        moment sterowania i moment przywracajacy licza sie w dwoch roznych
+        skalach i porownywanie ich nie ma sensu.
+
+        DLACZEGO TO PULAPKA: DATCOM normalizuje CM przez LREF, a generator
+        podaje mu LREF = dlugosc kadluba (1.285 m dla 70mm). Tymczasem model
+        6DOF mnozy wspolczynniki momentu przez geom.d_ref = SREDNICA (0.070 m).
+        Roznica to czynnik ~18. Domyslne wziecie table.d_ref (czyli LREF z
+        DATCOM) dawalo moment sterowania 18x wiekszy niz moment przywracajacy
+        liczony w konwencji modelu — 5 deg canardow "przewracalo" rakiete.
+        Dlatego domyslnie bierzemy geometrie modelu, a nie tablicy.
+
+        UWAGA (osobna sprawa, poza zakresem modulu sterowania): to znaczy, ze
+        pasywna aerodynamika stosuje wspolczynniki DATCOM-a znormalizowane
+        przez 1.285 m mnozac je przez 0.070 m. Jesli to blad, dotyczy on
+        ZWALIDOWANEGO modelu pasywnego, nie sterowania — nie zmieniamy tego
+        tutaj. Modul sterowania jedynie trzyma sie TEJ SAMEJ konwencji, co
+        reszta modelu, zeby obie strony bilansu byly porownywalne.
+        """
         self.table = table
         self.S_ref = float(S_ref if S_ref is not None else table.S_ref)
         self.d_ref = float(d_ref if d_ref is not None else table.d_ref)
         self.name = name
         if self.S_ref <= 0.0 or self.d_ref <= 0.0:
             raise ValueError("AeroSurfaceEffector: S_ref i d_ref musza byc > 0")
+
+    @classmethod
+    def from_geometry(cls, table: ControlDerivTable, geom,
+                      name: str = "canards") -> "AeroSurfaceEffector":
+        """
+        Zalecany sposob tworzenia: bierze S_ref/d_ref z geometrii modelu 6DOF,
+        czyli dokladnie te wartosci, ktorymi posluguje sie pasywna aero.
+        """
+        return cls(table, S_ref=geom.S_ref, d_ref=geom.d_ref, name=name)
 
     def wrench(self, u: np.ndarray, fs: FlightState) -> ControlWrench:
         u = np.asarray(u, dtype=float)
