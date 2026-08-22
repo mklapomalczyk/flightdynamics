@@ -61,6 +61,7 @@ def main():
     print("=" * 76)
 
     any_data = False
+    results = []
     for case in CASES:
         p = ROOT / "datcom_runs" / case / "datcom.out"
         if not p.exists():
@@ -79,6 +80,8 @@ def main():
         m_xcp = S * CN * (xcg - xcp)     # niezaleznie: sila x ramie
         m_L = S * L * CM                 # z CM przy LREF z DATCOM
         m_d = S * D_REF_MODEL * CM       # z CM przy srednicy (konwencja modelu)
+        ok = abs(L - D_REF_MODEL) <= 0.05 * D_REF_MODEL
+        results.append((case, L, ok))
 
         print(f"\n{case}   (alpha={c.alpha[i]:+.0f} deg, Mach={c.mach})")
         print(f"  DATCOM: SREF={S:.6f} m^2  LREF={L} m  XCG={xcg} m  XCP={xcp:.4f} m")
@@ -87,47 +90,30 @@ def main():
               f"(iloraz {m_xcp/m_L if m_L else float('nan'):.4f})")
         print(f"  moment/q  z CM * d_ref(model)  : {m_d:+.6f}   "
               f"({m_L/m_d if m_d else float('nan'):.1f}x mniejszy)")
+        print(f"  -> LREF {'==' if ok else '!='} srednica modelu "
+              f"({D_REF_MODEL} m): {'OK' if ok else 'NIEZGODNOSC'}")
 
     if not any_data:
         print("\nBrak plikow datcom.out — nie ma czego sprawdzic.")
         return 0
 
+    stale = [(c, L) for c, L, ok in results if not ok]
     print("\n" + "=" * 76)
-    print("WNIOSEK")
+    if stale:
+        print("WYNIK: NIEZGODNOSC — te pliki powstaly przy LREF != srednica:")
+        for c, L in stale:
+            print(f"  {c}:  LREF={L} m  (oczekiwano {D_REF_MODEL} m)")
+        print("\nGenerator ustawia juz LREF = srednica kadluba, wiec te wyniki")
+        print("sa PRZESTARZALE. Przelicz je ponownie na maszynie z DATCOM:")
+        print("    python MAIN.py                     (aero bazowe)")
+        print("    python run_control_datcom.py all --run   (sterowanie + test GAM)")
+        print("Do czasu przeliczenia aero.py odrzuci te pliki z jawnym bledem,")
+        print("zamiast po cichu policzyc momenty ~18x za male.")
+        print("=" * 76)
+        return 1
+    print("WYNIK: OK — CM znormalizowane przez srednice, zgodnie z konwencja modelu.")
+    print("Zgodnosc dwoch niezaleznych drog (XCP vs CM*LREF) potwierdza normalizacje.")
     print("=" * 76)
-    print("""
-Iloraz "z XCP" / "z CM * LREF" bliski 1.000 potwierdza, ze DATCOM znormalizowal
-CM wlasnie przez LREF podana w decku (dlugosc kadluba), a nie przez srednice.
-
-Model 6DOF mnozy natomiast przez d_ref = srednica, wiec momenty pochylajacy
-i odchylajacy sa okolo 18x za male.
-
-CO Z TYM ZROBIC — do decyzji, bo dotyka ZWALIDOWANYCH wynikow:
-
-  Opcja A (zalecana): ustawic w generatorze LREF = srednica kadluba, czyli
-    wartosc DOMYSLNA wg podrecznika i standardowa konwencje pociskowa.
-    Wymaga ponownego przebiegu DATCOM dla wszystkich przypadkow. Model
-    pozostaje bez zmian. Uwaga: XCP jest podawany W JEDNOSTKACH LREF, wiec
-    czytnik automatycznie dostanie spojne wartosci.
-
-  Opcja B: zostawic LREF = dlugosc kadluba i mnozyc w modelu przez lref
-    z tablicy zamiast przez geom.d_ref. Nie wymaga DATCOM, ale rozjezdza sie
-    z konwencja, w ktorej liczone sa czlony tlumiace (q*d/2V) i moment toczacy.
-
-Wplyw zmierzony na locie 19 (wiatr staly, pochodne sterowania z DATCOM):
-    crossrange:  99 m  ->  991 m     (telemetria: 1410 m)
-    downrange : 5319 m -> 4935 m     (telemetria: 4233 m)
-    apogeum   : 2080 m -> 2163 m     (telemetria: 1537 m)
-
-Czyli poprawka podnosi crossrange z ~7% do ~70% wartosci zmierzonej. To jest
-prawdopodobnie glowna przyczyna niedoszacowania crossrange, ktore w tej sesji
-probowalismy tlumaczyc kolejno rollem, kierunkiem wiatru, sila wiatru, profilem
-wiatru z wysokoscia i sztywnoscia pitch/yaw. Dopasowanie sztywnosci pitch/yaw
-"nie zbiegalo" wlasnie dlatego, ze testowany zakres siegal x3, a potrzebne bylo
-okolo x18.
-
-Apogeum nadal przestrzelone — to osobny watek (deficyt oporu w fazie balistycznej).
-""")
     return 0
 
 

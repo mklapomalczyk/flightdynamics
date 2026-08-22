@@ -166,9 +166,26 @@ def generate_missile_datcom_input(
     lines.append("")
 
     # --- $REFQ ------------------------------------------------------------
+    # LREF = SREDNICA kadluba, nie jego dlugosc.
+    #
+    # DATCOM zwraca CM jako wielkosc bezwymiarowa: CM = M / (q*SREF*LREF), wiec
+    # zeby odzyskac moment trzeba pomnozyc przez TE SAMA LREF. Model 6DOF liczy
+    # moment jako q_dyn*S_ref*d_ref*Cm z d_ref = SREDNICA (models/aerodynamics.py),
+    # czyli oczekuje wspolczynnikow znormalizowanych przez srednice — to zarazem
+    # DOMYSLNA wartosc LREF wg podrecznika ($REFQ: "Default is maximum body
+    # diameter") i standardowa konwencja pociskowa.
+    #
+    # Wczesniej podawano tu dlugosc kadluba (1.285 m przy srednicy 0.070 m), wiec
+    # DATCOM normalizowal przez 1.285, a model mnozyl przez 0.070 — momenty
+    # pochylajacy i odchylajacy wychodzily ~18x za male. Zweryfikowane dwiema
+    # niezaleznymi drogami (moment z XCP: sila x ramie, kontra moment z CM*LREF),
+    # patrz check_moment_reference.py.
+    #
+    # UWAGA: XCP jest raportowany W JEDNOSTKACH LREF, wiec czytnik
+    # (xcp_m = xcg - xcp_cal*lref) automatycznie pozostaje spojny.
     lines.append(f" $REFQ    XCG={xcg:.4f},")
     lines.append(f"          SREF={S:.7f},")
-    lines.append(f"          LREF={l:.4f},")
+    lines.append(f"          LREF={d:.4f},")
     lines.append(f"          RHR=0.,$")
     lines.append("")
 

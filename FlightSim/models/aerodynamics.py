@@ -305,6 +305,7 @@ class TableAero:
         CLL_table:   Optional[np.ndarray] = None,
         xcg_ref:     float = 0.0,
         CA_base_table: Optional[np.ndarray] = None,
+        lref_ref:    Optional[float] = None,
     ):
         self.alpha_table = np.asarray(alpha_table, dtype=float)
         self.mach_table  = np.asarray(mach_table,  dtype=float)
@@ -323,7 +324,12 @@ class TableAero:
         self.CYB_table   = np.asarray(CYB_table,   dtype=float) if CYB_table is not None else None
         self.CLL_table   = np.asarray(CLL_table, dtype=float) if CLL_table is not None else None
         self.Cmq         = float(Cmq)   # fallback gdy brak tabeli
-        self.xcg_ref     = float(xcg_ref)  # xcg uzyte w DATCOM [m od nosa]
+        self.xcg_ref     = float(xcg_ref)
+        # Dlugosc odniesienia, przez ktora ZNORMALIZOWANO wspolczynniki momentu
+        # (LREF z DATCOM). Musi sie zgadzac z d_ref uzywanym przy liczeniu
+        # momentu, inaczej momenty sa przeskalowane — patrz aero.py.
+        # None = pickle sprzed wprowadzenia tego pola (traktowany jako podejrzany).
+        self.lref_ref    = None if lref_ref is None else float(lref_ref)  # xcg uzyte w DATCOM [m od nosa]
 
         if self.Cm_table is None and self.xcp_table is None:
             raise ValueError(

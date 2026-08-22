@@ -58,7 +58,9 @@ def _get_missile_datcom(cfg, case_name, run_dir, Cmq, force_rerun, compute_cmq=T
     if pkl_path.exists() and not force_rerun:
         print(f"[aero] Missile DATCOM: laduje cache {pkl_path.name}")
         with open(pkl_path, "rb") as f:
-            return pickle.load(f)
+            cached = pickle.load(f)
+        _check_moment_reference(cached, cfg, pkl_path)
+        return cached
 
     if (out_path.exists() and not force_rerun
             and (not compute_cmq or out_body_path.exists())
@@ -104,6 +106,30 @@ def _get_missile_datcom(cfg, case_name, run_dir, Cmq, force_rerun, compute_cmq=T
     return _parse_and_cache(out_path, pkl_path, Cmq,
                             out_body_path if compute_cmq else None,
                             out_roll_path if compute_roll else None, cfg)
+def _check_moment_reference(aero_obj, cfg, src):
+    """
+    Pilnuje, ze wspolczynniki momentu sa znormalizowane przez SREDNICE — czyli
+    przez te sama dlugosc, ktora model podstawia licząc moment (geom.d_ref).
+    Chroni przed cichym uzyciem cache sprzed zmiany LREF (bylo: dlugosc kadluba,
+    czyli momenty 18.3x za male dla 70mm).
+    """
+    if cfg is None:
+        return
+    d_body = float(cfg.body.diameter)
+    lref = getattr(aero_obj, "lref_ref", None)
+    if lref is None:
+        raise ValueError(
+            f"\n{src}: cache nie zawiera informacji o dlugosci odniesienia "
+            f"(pochodzi sprzed poprawki LREF).\n"
+            f"Usun ten plik i przelicz aero od nowa (force_rerun=True), "
+            f"albo uruchom: python check_moment_reference.py")
+    if abs(lref - d_body) > 0.05 * max(d_body, 1e-9):
+        raise ValueError(
+            f"\n{src}: wspolczynniki znormalizowane przez LREF={lref} m, a model "
+            f"mnozy przez srednice={d_body} m ({lref/d_body:.1f}x rozbieznosci).\n"
+            f"Przegeneruj deck i uruchom DATCOM ponownie (force_rerun=True).")
+
+
 def _parse_and_cache(out_path, pkl_path, Cmq, out_body_path=None,
                       out_roll_path=None, cfg=None):
     import numpy as np
@@ -113,6 +139,27 @@ def _parse_and_cache(out_path, pkl_path, Cmq, out_body_path=None,
     result = parse_missile_datcom_output(out_path)
     table  = missile_datcom_to_table_aero(result)
     alpha_rad = np.deg2rad(table["alpha_deg"])
+
+    # --- Kontrola dlugosci odniesienia momentu ---------------------------- #
+    # DATCOM zwraca CM = M/(q*SREF*LREF); model liczy moment jako
+    # q*S_ref*d_ref*Cm z d_ref = SREDNICA. Obie wielkosci MUSZA byc te same,
+    # inaczej momenty sa przeskalowane o LREF/srednica (dla 70mm bylo to 18.3x).
+    # Generator ustawia teraz LREF = srednica, ale STARE pliki datcom*.out
+    # powstaly przy LREF = dlugosc kadluba i po cichu dawalyby zle momenty —
+    # dlatego sprawdzamy to przy kazdym parsowaniu.
+    if cfg is not None and result.cases:
+        lref_out = float(result.cases[0].lref)
+        d_body = float(cfg.body.diameter)
+        if abs(lref_out - d_body) > 0.05 * max(d_body, 1e-9):
+            raise ValueError(
+                f"\n{out_path}: LREF z DATCOM = {lref_out} m, a srednica kadluba "
+                f"= {d_body} m (stosunek {lref_out/d_body:.1f}x).\n"
+                f"Model mnozy wspolczynniki momentu przez srednice, wiec ten plik "
+                f"dalby momenty {lref_out/d_body:.1f}x za duze/male.\n"
+                f"To najpewniej WYNIK ZE STAREGO DECKA (LREF = dlugosc kadluba). "
+                f"Przegeneruj i uruchom DATCOM ponownie:\n"
+                f"    python MAIN.py            (albo run_control_datcom.py --run)\n"
+                f"Szczegoly: python check_moment_reference.py")
 
     # Oblicz tabelę Cmq i Clp z dwóch przebiegów
     Cmq_table = None

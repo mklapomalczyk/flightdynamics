@@ -97,8 +97,19 @@ check("DELTA obecne w obu (zaklinowanie nie zginelo)",
 
 ref = ROOT / "datcom_runs" / "rocket_70mm_baseline_cant0p600" / "for005.dat"
 if ref.exists():
-    check("emit_gam=True odtwarza zacommitowany deck bajt w bajt",
-          p_gm.read_text().strip() == ref.read_text().strip())
+    # Zacommitowany deck powstal PRZED poprawka LREF (mial LREF = dlugosc
+    # kadluba). Wzgledem niego aktualny generator z emit_gam=True rozni sie
+    # WYLACZNIE linia LREF — inne roznice oznaczalyby niezamierzona zmiane.
+    cur = p_gm.read_text().splitlines()
+    old = ref.read_text().splitlines()
+    only_cur = [l for l in cur if l not in old]
+    only_old = [l for l in old if l not in cur]
+    check("emit_gam=True rozni sie od starego decka TYLKO linia LREF",
+          len(only_cur) == 1 and len(only_old) == 1
+          and "LREF" in only_cur[0] and "LREF" in only_old[0],
+          f"(+{only_cur} / -{only_old})")
+    check("nowy deck ma LREF = srednica (0.0700)",
+          any("LREF=0.0700" in l for l in cur), f"({only_cur})")
 else:
     skip("porownanie z zacommitowanym deckiem", f"brak {ref}")
 
