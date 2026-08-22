@@ -1,3 +1,4 @@
+import os
 import sys, pickle
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.resolve()
@@ -115,6 +116,18 @@ def _check_moment_reference(aero_obj, cfg, src):
     """
     if cfg is None:
         return
+    # Furtka WYLACZNIE do zrobienia migawki "przed" (compare_validation.py
+    # --save-baseline): pozwala jeszcze raz policzyc walidacje na STARYCH
+    # danych, zeby bylo z czym porownac wynik po poprawce. Wlacza sie tylko
+    # jawnie zmienna srodowiskowa i glosno o sobie mowi — nigdy nie jest
+    # domyslna, bo blad jest cichy i wart 18x w momencie.
+    if os.environ.get("FLIGHTSIM_ALLOW_STALE_LREF") == "1":
+        lref_dbg = getattr(aero_obj, "lref_ref", None)
+        print(f"[aero] *** UWAGA: FLIGHTSIM_ALLOW_STALE_LREF=1 — pomijam kontrole "
+              f"dlugosci odniesienia dla {getattr(src, 'name', src)} "
+              f"(lref={lref_dbg}). Wyniki maja momenty pochylajace/odchylajace "
+              f"~18x za male. Uzywac TYLKO do migawki 'przed'.")
+        return
     d_body = float(cfg.body.diameter)
     lref = getattr(aero_obj, "lref_ref", None)
     if lref is None:
@@ -147,7 +160,8 @@ def _parse_and_cache(out_path, pkl_path, Cmq, out_body_path=None,
     # Generator ustawia teraz LREF = srednica, ale STARE pliki datcom*.out
     # powstaly przy LREF = dlugosc kadluba i po cichu dawalyby zle momenty —
     # dlatego sprawdzamy to przy kazdym parsowaniu.
-    if cfg is not None and result.cases:
+    if (cfg is not None and result.cases
+            and os.environ.get("FLIGHTSIM_ALLOW_STALE_LREF") != "1"):
         lref_out = float(result.cases[0].lref)
         d_body = float(cfg.body.diameter)
         if abs(lref_out - d_body) > 0.05 * max(d_body, 1e-9):
