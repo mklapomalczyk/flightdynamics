@@ -69,6 +69,12 @@ class ControlDerivTable:
             name: RegularGridInterpolator(
                 grid, np.asarray(getattr(self, name), float),
                 method="linear", bounds_error=False, fill_value=None)
+            # fill_value=None => ekstrapolacja liniowa. Sama w sobie jest OK
+            # blisko brzegu, ale przy rozbieganiu sie stanu (beta rzedu
+            # dziesiatek stopni) dawala rosnaca w nieskonczonosc skutecznosc
+            # sterowania i napedzala rozbieganie. Dlatego interp() PRZYCINA
+            # argumenty do zakresu tablicy — poza zakresem trzymamy wartosc
+            # brzegowa zamiast zmyslac coraz wiekszą.
             for name in ("Cm_delta", "Cn_delta", "Cl_delta",
                          "CN_delta", "CY_delta")
         }
@@ -86,7 +92,9 @@ class ControlDerivTable:
         """Wszystkie pochodne w jednym punkcie (alpha [rad], Mach)."""
         if self._interp is None:
             self._build()
-        pt = np.array([[float(alpha_rad), float(mach)]])
+        a = float(np.clip(alpha_rad, self.alpha_rad[0], self.alpha_rad[-1]))
+        m = float(np.clip(mach, self.mach[0], self.mach[-1]))
+        pt = np.array([[a, m]])
         return {k: float(v(pt)[0]) for k, v in self._interp.items()}
 
 

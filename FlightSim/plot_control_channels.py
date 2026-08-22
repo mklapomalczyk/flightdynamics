@@ -138,6 +138,13 @@ def main():
             rate = np.degrees(getattr(res, rate_at))
             ang = unwrap_deg(getattr(res, ang_at))
             ang_off = unwrap_deg(getattr(r_off, ang_at))
+            # Predkosc katowa MUSI byc liczona jako roznica wzgledem przebiegu
+            # bez sterowania. W kanale pitch tlo (zakret grawitacyjny) to ~9 deg/s
+            # i przy malych wychyleniach calkowicie zaslania odpowiedz na komende,
+            # przez co pitch wygladal na 4x mniej skuteczny niz yaw, gdzie tlo
+            # jest zerowe. To byl artefakt metryki, nie asymetria modelu.
+            d_rate = rate - np.interp(res.t, r_off.t,
+                                      np.degrees(getattr(r_off, rate_at)))
 
             ax[0, 0].plot(res.t, np.where((res.t >= T_STEP) &
                                           (res.t < T_STEP + T_DUR), amp, 0.0),
@@ -146,7 +153,7 @@ def main():
             ax[1, 0].plot(res.t, rate, color=col, lw=1.5, label=f"{amp:.0f} deg")
             ax[1, 1].plot(res.t, ang, color=col, lw=1.5, label=f"{amp:.0f} deg")
 
-            rows.append((amp, float(np.max(np.abs(rate))),
+            rows.append((amp, float(np.max(np.abs(d_rate))),
                          float(ang[-1] - np.interp(res.t[-1], r_off.t, ang_off)),
                          float(np.max(np.abs(mom))), res.status))
 
@@ -169,7 +176,7 @@ def main():
 
         summary[lbl] = rows
         print(f"\n{lbl}:")
-        print(f"  {'ampl':>5} {'max|rate|':>11} {'d_kat(koniec)':>14} "
+        print(f"  {'ampl':>5} {'max|d_rate|':>11} {'d_kat(koniec)':>14} "
               f"{'max|M|':>9}  status")
         for amp, mr, da, mm, st in rows:
             print(f"  {amp:>5.0f} {mr:>9.1f}d/s {da:>12.2f}deg {mm:>8.3f}Nm  {st}")

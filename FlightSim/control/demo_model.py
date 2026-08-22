@@ -30,6 +30,45 @@ ALPHA_GRID = np.deg2rad(np.array([-20., -10., 0., 10., 20.]))
 MACH_GRID = np.array([0.1, 0.5, 1.0, 2.0, 3.0])
 
 
+# Sztywnosc statyczna realnej rakiety 70mm po poprawce LREF (patrz
+# check_moment_reference.py). Uzywana tylko w awaryjnej tablicy zastepczej,
+# zeby NIE byla o rzad wielkosci mieksza niz airframe, do ktorego liczymy
+# pochodne sterowania.
+CM_ALPHA_REAL = -54.0      # [1/rad]
+
+
+_REAL_AERO_CACHE: list = []      # [] = jeszcze nie probowano, [x] = wynik
+
+
+def real_aero_or_none():
+    """
+    Prawdziwa aero 70mm z DATCOM, jesli jest dostepna i aktualna.
+
+    Dlaczego to wazne: pochodne sterowania pochodza z DATCOM, wiec sztywnosc
+    statyczna MUSI pochodzic z tego samego zrodla i tej samej normalizacji.
+    Recznie wpisana tablica Cm nie skaluje sie razem z poprawka LREF — po
+    zmianie LREF sterowanie uroslo ~18x, a zastepcza sztywnosc nie, przez co
+    canardy "przewracaly" model (kanal yaw wpadal w tumbling).
+
+    Wynik jest keszowany: build_demo_model wolamy raz na przebieg, a testy
+    macierzowe robia kilkanascie przebiegow — bez cache kazdy z nich probowal
+    (i logowal) pelne uruchomienie DATCOM.
+    """
+    if _REAL_AERO_CACHE:
+        return _REAL_AERO_CACHE[0]
+    try:
+        from aero import get_aero_model
+        out = get_aero_model("rocket_70mm_baseline", method="missile_datcom",
+                             force_rerun=False)
+    except Exception as exc:
+        print(f"[demo] Brak aktualnej aero DATCOM ({type(exc).__name__}) — "
+              f"uzywam tablicy zastepczej o realistycznej sztywnosci "
+              f"Cm_alpha={CM_ALPHA_REAL:+.0f}/rad.")
+        out = None
+    _REAL_AERO_CACHE.append(out)
+    return out
+
+
 def demo_aero(with_roll_damping: bool = True) -> TableAero:
     """
     Uproszczona, ale statycznie stabilna aerodynamika.
@@ -40,15 +79,25 @@ def demo_aero(with_roll_damping: bool = True) -> TableAero:
     sterowania, a jest po prostu brakiem tlumienia w modelu demo.
     Prawdziwa rakieta ma Clp z DATCOM ($RLLO) albo z przyblizenia analitycznego.
     """
+    real = real_aero_or_none()
+    if real is not None:
+        if with_roll_damping and getattr(real, "Clp_table", None) is None:
+            real.Clp_table = -2.0 * np.ones_like(real.CN_table)
+        return real
+
+    # Tablica zastepcza — Cm dobrane tak, by Cm_alpha odpowiadalo realnej
+    # rakiecie, a nie bylo 16x miekksze (patrz komentarz przy CM_ALPHA_REAL).
     o = np.ones((len(ALPHA_GRID), len(MACH_GRID)))
+    cm_col = CM_ALPHA_REAL * ALPHA_GRID            # Cm = Cm_alpha * alpha
     return TableAero(
         alpha_table=ALPHA_GRID,
         mach_table=MACH_GRID,
         CA_table=0.45 * o,
         CN_table=np.array([[-4.] * 5, [-2.] * 5, [0.] * 5, [2.] * 5, [4.] * 5]),
-        Cm_table=np.array([[1.2] * 5, [0.6] * 5, [0.] * 5, [-0.6] * 5, [-1.2] * 5]),
+        Cm_table=np.repeat(cm_col[:, None], len(MACH_GRID), axis=1),
         Clp_table=(-2.0 * o) if with_roll_damping else None,
         xcg_ref=0.71,
+        lref_ref=0.070,
     )
 
 
