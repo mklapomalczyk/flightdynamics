@@ -340,6 +340,8 @@ def _plot(base, curr, metrics, name, variant, exclude=frozenset()):
                  fontsize=13, fontweight="bold")
     fig.tight_layout()
     p = RESULTS / f"validation_compare_{name}_{variant}.png"
+    if p.exists():
+        p.unlink()
     fig.savefig(p, dpi=130, bbox_inches="tight")
     plt.close(fig)
     print(f"Zapisano wykres: {p}")

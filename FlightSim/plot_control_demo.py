@@ -49,6 +49,12 @@ from models.gravity import create_gravity
 from models.launcher import LauncherConfig
 from models.mass6 import ConstantIxx, MassModel6DOF
 
+def safe_savefig(fig, path, **kwargs):
+    p = Path(path)
+    if p.exists():
+        p.unlink()
+    fig.savefig(p, **kwargs)
+
 OUT_DIR = ROOT / "results"
 CTRL_DIR = ROOT / "datcom_runs" / "rocket_70mm_canards"
 
@@ -185,7 +191,7 @@ def plot_step_response(table, amp, tstep, dur, tag, show):
     fig.tight_layout()
     OUT_DIR.mkdir(exist_ok=True)
     p = OUT_DIR / "control_step_response.png"
-    fig.savefig(p, dpi=130, bbox_inches="tight")
+    safe_savefig(fig, p, dpi=130, bbox_inches="tight")
     print(f"Zapisano: {p}")
 
     d_theta = np.degrees(r_on.theta[-1] - r_off.theta[-1])
@@ -232,7 +238,7 @@ def plot_derivatives(show):
     fig.tight_layout()
     OUT_DIR.mkdir(exist_ok=True)
     p = OUT_DIR / "control_derivatives.png"
-    fig.savefig(p, dpi=130, bbox_inches="tight")
+    safe_savefig(fig, p, dpi=130, bbox_inches="tight")
     print(f"Zapisano: {p}")
 
     # --- kontrola liniowosci: surowy CM wzdluz sweepa + dopasowana prosta --
@@ -272,7 +278,7 @@ def plot_derivatives(show):
             a2.legend(fontsize=9); a2.grid(alpha=0.3)
             fig2.tight_layout()
             p2 = OUT_DIR / "control_linearity.png"
-            fig2.savefig(p2, dpi=130, bbox_inches="tight")
+            safe_savefig(fig2, p2, dpi=130, bbox_inches="tight")
             print(f"Zapisano: {p2}")
     if show:
         plt.show()

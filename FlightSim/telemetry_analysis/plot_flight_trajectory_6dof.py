@@ -43,6 +43,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+
+def safe_savefig(fig_or_plt, path, **kwargs):
+    p = Path(path)
+    if p.exists():
+        p.unlink()
+    fig_or_plt.savefig(p, **kwargs)
+
 from telemetry_parser import get_data_dir, parse_telemetry, resolve_data_file
 from run_6dof_cant_montecarlo import get_aero_for_cant
 from datcom_io.config_reader import load_config
@@ -306,7 +313,7 @@ def plot_flight(fno, model, actual, out_png):
     fig.suptitle(f"Lot {fno}: model 6DOF (adjusted+wiatr, profil ciagu tego lotu + zmierzony "
                  f"wiatr Open-Meteo) vs dane polowe (status modelu: {model['status']})", fontsize=12)
     plt.tight_layout()
-    plt.savefig(out_png, dpi=140, bbox_inches="tight")
+    safe_savefig(plt, out_png, dpi=140, bbox_inches="tight")
     plt.close()
     print(f"Zapisano: {out_png}")
 
@@ -342,7 +349,7 @@ def plot_gust_sweep(fno, labels, model_runs, out_png, sweep_name, title_extra):
 
     fig.suptitle(f"Lot {fno}: sweep {sweep_name} -- {title_extra}", fontsize=12)
     plt.tight_layout()
-    plt.savefig(out_png, dpi=140, bbox_inches="tight")
+    safe_savefig(plt, out_png, dpi=140, bbox_inches="tight")
     plt.close()
     print(f"Zapisano: {out_png}")
 
@@ -408,7 +415,7 @@ def plot_roll_yaw_resonance(fno, model, out_png):
     fig.suptitle(f"Lot {fno}: roll p(t) vs pitch/yaw |qr|(t) -- diagnostyka rezonansu "
                  f"roll-pitch/yaw (status modelu: {model['status']})", fontsize=12)
     plt.tight_layout()
-    plt.savefig(out_png, dpi=140, bbox_inches="tight")
+    safe_savefig(plt, out_png, dpi=140, bbox_inches="tight")
     plt.close()
     print(f"Zapisano: {out_png}")
 

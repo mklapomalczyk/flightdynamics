@@ -67,6 +67,14 @@ CHANNELS = {
 }
 
 
+def safe_savefig(fig, path, **kwargs):
+    """Usun plik przed zapisem — Windows moze trzymac lock (podglad, Photos)."""
+    p = Path(path)
+    if p.exists():
+        p.unlink()
+    fig.savefig(p, **kwargs)
+
+
 def unwrap_deg(a):
     """Katy Eulera owijaja sie na +/-180 deg — bez tego roznice na koncu
     przebiegu (zwlaszcza dla rolla) sa bez sensu."""
@@ -221,7 +229,7 @@ def main():
         ax[1, 1].set_title("Kat")
         fig.tight_layout()
         p = OUT_DIR / f"control_channel_{lbl.lower()}.png"
-        fig.savefig(p, dpi=130, bbox_inches="tight")
+        safe_savefig(fig, p, dpi=130, bbox_inches="tight")
         plt.close(fig)
 
         summary[lbl] = rows
@@ -245,7 +253,7 @@ def main():
         a.grid(alpha=0.3); a.legend(fontsize=9)
     fig.tight_layout()
     p = OUT_DIR / "control_channels_summary.png"
-    fig.savefig(p, dpi=130, bbox_inches="tight")
+    safe_savefig(fig, p, dpi=130, bbox_inches="tight")
     plt.close(fig)
 
     print(f"\nWykresy: {OUT_DIR}/control_channel_{{pitch,yaw,roll}}.png")
