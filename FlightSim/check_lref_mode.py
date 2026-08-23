@@ -110,6 +110,33 @@ def main():
     else:
         print("   brak datcom.out")
 
+    # 3b. WSZYSTKIE katalogi przebiegow ----------------------------------- #
+    # Walidacja per lot NIE liczy w katalogu bazowego case'u: get_aero_for_cant
+    # zapisuje tymczasowy YAML per cant i liczy w '<case>_cantXpYYY'. Patrzenie
+    # tylko na katalog bazowy pokazuje wiec stare smieci, a nie to, czego
+    # walidacja naprawde uzyla. Tutaj skanujemy wszystko + czasy modyfikacji,
+    # zeby bylo widac, ktory przebieg jest z ktorej proby.
+    print("\n3b) Wszystkie katalogi datcom_runs (LREF + czas modyfikacji)")
+    from datetime import datetime
+    runs = sorted((ROOT / "datcom_runs").glob("*/"))
+    if not runs:
+        print("   brak")
+    print(f"   {'katalog':<38} {'for005':>8} {'zapisany':>17}  {'datcom.out':>10}")
+    for rd in runs:
+        f5, dout = rd / "for005.dat", rd / "datcom.out"
+        if not f5.exists() and not dout.exists():
+            continue
+        lv = lref_in_deck(f5) if f5.exists() else None
+        ts = (datetime.fromtimestamp(f5.stat().st_mtime).strftime("%m-%d %H:%M:%S")
+              if f5.exists() else "-")
+        ov = ""
+        if dout.exists():
+            ov = datetime.fromtimestamp(dout.stat().st_mtime).strftime("%m-%d %H:%M:%S")
+        print(f"   {rd.name:<38} {str(lv):>8} {ts:>17}  {ov:>10}")
+    print("   Oczekiwanie: katalogi '<case>_cant...' to te, ktorych uzywa")
+    print("   walidacja per lot. Jesli ich for005.dat maja LREF=0.07 mimo")
+    print("   trybu PRZED, to zmienna nie dotarla do TEGO przebiegu.")
+
     # 4. co realnie trafia do modelu -------------------------------------- #
     print("\n4) Tablica aero podawana modelowi (przez cache/pkl)")
     try:
