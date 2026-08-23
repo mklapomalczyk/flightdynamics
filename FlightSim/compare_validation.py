@@ -30,8 +30,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import shutil
+import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +54,33 @@ METRICS = [
     ("downrange_apo_pred_adjusted_m",    "downrange_apo_actual_m",  "downrange",  "m"),
     ("crossrange_apo_pred_adjusted_m",   "crossrange_apo_actual_m", "crossrange", "m"),
 ]
+
+
+def file_sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def git_head() -> str:
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                              cwd=ROOT, capture_output=True, text=True,
+                              timeout=10).stdout.strip() or "?"
+    except Exception:
+        return "?"
+
+
+def meta_path(name: str) -> Path:
+    return SNAP_DIR / f"{name}.meta.json"
+
+
+def read_meta(name: str) -> dict:
+    p = meta_path(name)
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
 def read_csv(path: Path):
@@ -86,7 +117,10 @@ def cmd_list():
     print(f"Migawki w {SNAP_DIR}:")
     for s in snaps:
         d = read_csv(s)
-        print(f"  {s.stem:<28} {len(d) if d else 0} lotow")
+        m = read_meta(s.stem)
+        prov = (f"  {m.get('saved_at','?')}  commit {m.get('git_commit','?')}"
+                if m else "  (bez metadanych — zapisana starsza wersja skryptu)")
+        print(f"  {s.stem:<28} {len(d) if d else 0} lotow{prov}")
     return 0
 
 
@@ -99,21 +133,70 @@ def cmd_save(name: str):
     SNAP_DIR.mkdir(parents=True, exist_ok=True)
     dst = SNAP_DIR / f"{name}.csv"
     shutil.copy2(src, dst)
-    print(f"Zapisano migawke: {dst}  ({len(read_csv(dst))} lotow)")
+    # Metadane sa tu po to, zeby dalo sie ODPOWIEDZIEC "jaki model wyprodukowal
+    # ta migawke". Bez nich porownanie dwoch identycznych plikow wyglada jak
+    # "zmiana nic nie dala", a naprawde znaczy "migawka zostala zrobiona juz po
+    # zmianie modelu" — czego z samego CSV nie da sie odroznic.
+    meta = {"saved_at": datetime.now().isoformat(timespec="seconds"),
+            "git_commit": git_head(),
+            "source_sha": file_sha(src),
+            "source_mtime": src.stat().st_mtime,
+            "n_flights": len(read_csv(dst))}
+    meta_path(name).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    print(f"Zapisano migawke: {dst}  ({meta['n_flights']} lotow)")
+    print(f"  commit {meta['git_commit']}   sha CSV {meta['source_sha']}")
+    print(f"\nTeraz: zmien model, przelicz walidacje ponownie")
+    print(f"       (python telemetry_analysis/analyze_per_flight_6dof.py),")
+    print(f"       dopiero potem: python compare_validation.py --vs {name}")
     return 0
 
 
 def cmd_compare(name: str, do_plot: bool):
-    base = read_csv(SNAP_DIR / f"{name}.csv")
-    curr = read_csv(RESULTS / CSV_NAME)
+    snap = SNAP_DIR / f"{name}.csv"
+    src = RESULTS / CSV_NAME
+    base = read_csv(snap)
+    curr = read_csv(src)
     if base is None:
         print(f"Brak migawki '{name}'. Dostepne:"); cmd_list(); return 1
     if curr is None:
-        print(f"Brak {RESULTS/CSV_NAME}\nUruchom najpierw: "
+        print(f"Brak {src}\nUruchom najpierw: "
               f"python telemetry_analysis/analyze_per_flight_6dof.py")
         return 1
 
+    # --- czy w ogole jest co porownywac? --------------------------------- #
+    # Najczestszy blad uzycia: migawka zapisana JUZ PO zmianie modelu, albo
+    # walidacja nieprzeliczona po zmianie. W obu wypadkach oba pliki sa te same
+    # i wykres pokazuje pary identycznych slupkow, co czytа sie jak "zmiana nic
+    # nie zmienila". To NIE jest wynik — to brak wyniku, wiec przerywamy.
+    meta = read_meta(name)
+    if file_sha(snap) == file_sha(src):
+        print("=" * 84)
+        print("PRZERWANO: migawka i aktualny wynik to DOKLADNIE TEN SAM plik.")
+        print("=" * 84)
+        print(f"  migawka        : {snap}")
+        print(f"  aktualny wynik : {src}")
+        print(f"  sha (oba)      : {file_sha(snap)}")
+        if meta:
+            print(f"  migawka zapisana: {meta.get('saved_at','?')}  "
+                  f"commit {meta.get('git_commit','?')}")
+        print("\nNie ma tu zadnej zmiany do pokazania. Prawdopodobna przyczyna:")
+        print("  a) migawka zostala zapisana JUZ PO zmianie modelu — wtedy")
+        print("     'przed' i 'po' opisuja ten sam model. Trzeba wrocic do")
+        print("     starej wersji modelu, przeliczyc walidacje i zapisac")
+        print("     migawke jeszcze raz;")
+        print("  b) walidacja nie zostala przeliczona po zmianie modelu —")
+        print("     uruchom: python telemetry_analysis/analyze_per_flight_6dof.py")
+        print("     i dopiero potem porownanie.")
+        return 2
+
+    if meta.get("source_mtime") and src.stat().st_mtime <= meta["source_mtime"] + 1:
+        print("UWAGA: plik z aktualnym wynikiem nie byl modyfikowany od czasu")
+        print("       zapisania migawki — walidacja moze byc nieprzeliczona.\n")
+
     print("=" * 84)
+    if meta:
+        print(f"migawka '{name}': {meta.get('saved_at','?')}, "
+              f"commit {meta.get('git_commit','?')}   |   teraz: commit {git_head()}")
     print(f"WALIDACJA: '{name}' (przed)   vs   aktualny wynik (po)")
     print("=" * 84)
 
@@ -153,7 +236,11 @@ def cmd_compare(name: str, do_plot: bool):
           f"{'zmiana':>10}   ocena")
     for label, unit, r0, r1, m0, m1, n in summary:
         chg = (r1 - r0) / r0 * 100.0 if r0 > 1e-12 else np.nan
-        verdict = ("POPRAWA" if chg < -1 else
+        # Rozroznienie IDENTYCZNE vs "bez zmian" jest istotne: pierwsze znaczy
+        # "ta metryka nie zalezy od tego, co zmienilismy" (albo cos sie nie
+        # przeliczylo), drugie — "zalezy, ale efekt jest ponizej 1%".
+        verdict = ("IDENTYCZNE" if abs(r1 - r0) < 1e-9 else
+                   "POPRAWA" if chg < -1 else
                    "POGORSZENIE" if chg > 1 else "bez zmian")
         print(f"  {label:<12} {n:>3} {r0:>12.1f} {r1:>10.1f} {chg:>+9.1f}%   {verdict}")
     print("=" * 84)
