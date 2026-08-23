@@ -343,9 +343,9 @@ def _compute_cmq_table(result_full, out_body, cfg):
     #          => Cmq = -2 * CNA_fins * ((x_fins - xcg)/d)^2
     #   roll:  dL = -(q*S_fin*CNa_1fin*(p*r/V))*r,      p_hat = p*d/(2V)
     #          => Clp = -2 * n * CNa_1fin * (r/d)^2
-    #          a poniewaz CNA_fins to wklad CALEGO zestawu w sile normalna,
-    #          w ukladzie krzyzowym nosza ja 2 z 4 pletw (CNa_1fin ~ CNA_fins/2),
-    #          podczas gdy toczenie tlumia wszystkie 4:
+    #          Wszystkie 4 pletwy tlumia toczenie (kazda widzi p*r/V), ale
+    #          CNA_fins z DATCOM to CN tylko 2 pletw w plaszczyznie alpha,
+    #          wiec CNa_1fin = CNA_fins/2:
     #          => Clp = -2 * 4 * (CNA_fins/2) * (r/d)^2 = -n * CNA_fins * (r/d)^2
     #
     # Wczesniej byly tu czynniki (lref/d) i (d/lref) z lref WCZYTANYM Z PLIKU
