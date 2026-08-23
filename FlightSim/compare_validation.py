@@ -172,7 +172,7 @@ def cmd_save(name: str):
     return 0
 
 
-def cmd_compare(name: str, do_plot: bool):
+def cmd_compare(name: str, do_plot: bool, exclude: set):
     snap = SNAP_DIR / f"{name}.csv"
     src = RESULTS / CSV_NAME
     base = read_csv(snap)
@@ -226,6 +226,8 @@ def cmd_compare(name: str, do_plot: bool):
         print(f"migawka '{name}': {meta.get('saved_at','?')}, "
               f"commit {meta.get('git_commit','?')}   |   teraz: commit {git_head()}")
     print(f"WALIDACJA: '{name}' (przed)   vs   aktualny wynik (po)")
+    if exclude:
+        print(f"WYKLUCZONE LOTY: {sorted(exclude)}")
     print("=" * 84)
 
     all_summaries = {}
@@ -237,37 +239,43 @@ def cmd_compare(name: str, do_plot: bool):
         print(f"\n{'#' * 84}")
         print(f"# WARIANT: {variant}  ({vlabel})")
         print(f"{'#' * 84}")
-        all_summaries[variant] = _compare_one(base, curr, metrics)
+        all_summaries[variant] = _compare_one(base, curr, metrics, exclude)
 
     print("\n" + "=" * 84)
-    print("PODSUMOWANIE ZBIORCZE (RMSE bledu model-pomiar; mniej = lepiej)")
+    print("PODSUMOWANIE ZBIORCZE (mniej = lepiej)")
     print("=" * 84)
+    # RMSE sam w sobie nie wystarcza: potrafi urosnac przez JEDEN lot z bledem
+    # znaku, jednoczesnie ukrywajac to, ze systematyczne przesuniecie zmalalo.
+    # Dlatego rozbijamy blad na BIAS (przesuniecie, jednakowe dla wszystkich
+    # lotow) i ROZRZUT (to, czego bias nie tlumaczy) — RMSE^2 = bias^2 + rozrzut^2.
+    print("  BIAS    = sredni blad (znak mowi, w ktora strone model sie myli)")
+    print("  ROZRZUT = odchylenie std bledu (blad NIE-systematyczny)")
     for variant, summary in all_summaries.items():
         print(f"\n  wariant '{variant}' ({VARIANTS[variant]}):")
-        print(f"  {'metryka':<12} {'n':>3} {'RMSE przed':>12} {'RMSE po':>10} "
-              f"{'zmiana':>10}   ocena")
-        for label, unit, r0, r1, m0, m1, n in summary:
+        print(f"  {'metryka':<12} {'n':>3} {'RMSE':>17} {'BIAS':>19} "
+              f"{'ROZRZUT':>17}   ocena")
+        for label, unit, r0, r1, b0, b1, s0, s1, n in summary:
             chg = (r1 - r0) / r0 * 100.0 if r0 > 1e-12 else np.nan
             verdict = ("IDENTYCZNE" if abs(r1 - r0) < 1e-9 else
                        "POPRAWA" if chg < -1 else
                        "POGORSZENIE" if chg > 1 else "bez zmian")
-            print(f"  {label:<12} {n:>3} {r0:>12.1f} {r1:>10.1f} "
-                  f"{chg:>+9.1f}%   {verdict}")
+            print(f"  {label:<12} {n:>3} {r0:>7.1f}->{r1:<8.1f} "
+                  f"{b0:>+8.1f}->{b1:<+9.1f} {s0:>7.1f}->{s1:<8.1f}   {verdict}")
     print("=" * 84)
 
     if do_plot:
         for variant in all_summaries:
-            _plot(base, curr, metrics_for(variant), name, variant)
+            _plot(base, curr, metrics_for(variant), name, variant, exclude)
     return 0
 
 
-def _compare_one(base, curr, metrics):
-    """Tabela per lot + RMSE dla jednego wariantu. Zwraca liste podsumowan."""
+def _compare_one(base, curr, metrics, exclude=frozenset()):
+    """Tabela per lot + statystyki dla jednego wariantu."""
     summary = []
     for pred_key, act_key, label, unit in metrics:
         eb = err_stats(base, pred_key, act_key)
         ec = err_stats(curr, pred_key, act_key)
-        common = sorted(set(eb) & set(ec))
+        common = [f for f in sorted(set(eb) & set(ec)) if f not in exclude]
         if not common:
             print(f"\n{label}: brak wspolnych lotow z danymi — pomijam")
             continue
@@ -283,18 +291,30 @@ def _compare_one(base, curr, metrics):
             print(f"  {fno:>4} {a:>10.1f} {p0:>10.1f} {p1:>10.1f} "
                   f"{e0:>+11.1f} {e1:>+10.1f} {mark:>9}")
 
-        rmse0 = float(np.sqrt(np.mean([eb[f][2] ** 2 for f in common])))
-        rmse1 = float(np.sqrt(np.mean([ec[f][2] ** 2 for f in common])))
-        mae0 = float(np.mean([abs(eb[f][2]) for f in common]))
-        mae1 = float(np.mean([abs(ec[f][2]) for f in common]))
+        e0 = np.array([eb[f][2] for f in common])
+        e1 = np.array([ec[f][2] for f in common])
+        rmse0, rmse1 = float(np.sqrt((e0 ** 2).mean())), float(np.sqrt((e1 ** 2).mean()))
+        bias0, bias1 = float(e0.mean()), float(e1.mean())
+        sd0 = float(e0.std(ddof=1)) if len(e0) > 1 else 0.0
+        sd1 = float(e1.std(ddof=1)) if len(e1) > 1 else 0.0
         chg = (rmse1 - rmse0) / rmse0 * 100.0 if rmse0 > 1e-12 else np.nan
         print(f"  {'RAZEM':>4} {'':>10} {'':>10} {'':>10} "
               f"RMSE {rmse0:>7.1f} -> {rmse1:<7.1f} ({chg:+.1f}%)")
-        summary.append((label, unit, rmse0, rmse1, mae0, mae1, len(common)))
+        print(f"  {'':>4} {'':>10} {'':>10} {'':>10} "
+              f"BIAS {bias0:>+7.1f} -> {bias1:<+7.1f}   "
+              f"ROZRZUT {sd0:.1f} -> {sd1:.1f}")
+        # Systematyczne niedoszacowanie/przeszacowanie widac dopiero po znakach:
+        # same |bledy| tego nie pokazuja, a to najczesciej wlasnie one mowia,
+        # czy model reaguje za slabo, czy za mocno.
+        s0 = "".join("+" if v > 0 else "-" for v in e0)
+        s1 = "".join("+" if v > 0 else "-" for v in e1)
+        if s0 != s1:
+            print(f"  {'':>4} znaki bledu: przed [{s0}]  ->  po [{s1}]")
+        summary.append((label, unit, rmse0, rmse1, bias0, bias1, sd0, sd1, len(common)))
     return summary
 
 
-def _plot(base, curr, metrics, name, variant):
+def _plot(base, curr, metrics, name, variant, exclude=frozenset()):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -303,7 +323,7 @@ def _plot(base, curr, metrics, name, variant):
         axes = [axes]
     for ax, (pred_key, act_key, label, unit) in zip(axes, metrics):
         eb, ec = err_stats(base, pred_key, act_key), err_stats(curr, pred_key, act_key)
-        common = sorted(set(eb) & set(ec))
+        common = [f for f in sorted(set(eb) & set(ec)) if f not in exclude]
         if not common:
             ax.set_visible(False); continue
         x = np.arange(len(common)); w = 0.38
@@ -332,14 +352,25 @@ def main():
     ap.add_argument("--vs", metavar="NAZWA")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--plot", action="store_true")
+    # Lot 14 domyslnie poza statystyka: jego symulacja NIE DZIALA (apogeum
+    # ~190 m przy pomiarze 2142 m, downrange ~100 m przy 3024 m). Blad rzedu
+    # -2000 m dominuje RMSE apogeum i downrange w OBU przebiegach, wiec
+    # wliczanie go opisuje zepsuty przebieg, a nie skutek zmiany w modelu.
+    # --exclude "" wlacza go z powrotem.
+    ap.add_argument("--exclude", default="14", metavar="LOTY",
+                    help="numery lotow pominietych w statystyce, po przecinku "
+                         "(domyslnie 14 — symulacja tego lotu nie dziala; "
+                         "--exclude \"\" nie pomija nic)")
     a = ap.parse_args()
+
+    excl = {int(x) for x in a.exclude.replace(";", ",").split(",") if x.strip()}
 
     if a.list:
         return cmd_list()
     if a.save_baseline:
         return cmd_save(a.save_baseline)
     if a.vs:
-        return cmd_compare(a.vs, a.plot)
+        return cmd_compare(a.vs, a.plot, excl)
     ap.print_help()
     return 0
 
