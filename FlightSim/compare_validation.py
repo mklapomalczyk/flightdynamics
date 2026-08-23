@@ -53,13 +53,28 @@ RESULTS = ROOT / "field_test_data" / "results"
 CSV_NAME = "per_flight_6dof_per_nose.csv"
 SNAP_DIR = RESULTS / "validation_snapshots"
 
-# (kolumna_modelu, kolumna_pomiaru, etykieta, jednostka, "mniej znaczy lepiej")
-METRICS = [
-    ("h_apo_pred_adjusted",              "h_apo_actual",            "apogeum",    "m"),
-    ("v_max_pred_adjusted",              "v_max_actual",            "Vmax",       "m/s"),
-    ("downrange_apo_pred_adjusted_m",    "downrange_apo_actual_m",  "downrange",  "m"),
-    ("crossrange_apo_pred_adjusted_m",   "crossrange_apo_actual_m", "crossrange", "m"),
-]
+# Analiza per lot zapisuje DWA warianty predykcji:
+#   'adjusted'       — bez wiatru,
+#   'adjusted_wind'  — z profilem wiatru.
+# Do crossrange liczy sie WYLACZNIE wariant z wiatrem: bez wiatru model nie ma
+# czym znosic rakiety w bok, wiec crossrange wychodzi ~0 niezaleznie od tego,
+# co zmienimy w aerodynamice. Porownywanie kolumny bez wiatru pokazywalo wiec
+# "brak zmian" tam, gdzie zmiana jest najwieksza.
+VARIANTS = {
+    "adjusted":      "bez wiatru",
+    "adjusted_wind": "z wiatrem",
+}
+
+
+def metrics_for(variant: str):
+    """(kolumna_modelu, kolumna_pomiaru, etykieta, jednostka)"""
+    v = variant
+    return [
+        (f"h_apo_pred_{v}",             "h_apo_actual",            "apogeum",    "m"),
+        (f"v_max_pred_{v}",             "v_max_actual",            "Vmax",       "m/s"),
+        (f"downrange_apo_pred_{v}_m",   "downrange_apo_actual_m",  "downrange",  "m"),
+        (f"crossrange_apo_pred_{v}_m",  "crossrange_apo_actual_m", "crossrange", "m"),
+    ]
 
 
 def file_sha(path: Path) -> str:
@@ -213,8 +228,43 @@ def cmd_compare(name: str, do_plot: bool):
     print(f"WALIDACJA: '{name}' (przed)   vs   aktualny wynik (po)")
     print("=" * 84)
 
+    all_summaries = {}
+    for variant, vlabel in VARIANTS.items():
+        metrics = metrics_for(variant)
+        if not any(k in (next(iter(curr.values())) or {}) for k, _, _, _ in metrics):
+            print(f"\n[wariant '{variant}' ({vlabel}) — brak kolumn w CSV, pomijam]")
+            continue
+        print(f"\n{'#' * 84}")
+        print(f"# WARIANT: {variant}  ({vlabel})")
+        print(f"{'#' * 84}")
+        all_summaries[variant] = _compare_one(base, curr, metrics)
+
+    print("\n" + "=" * 84)
+    print("PODSUMOWANIE ZBIORCZE (RMSE bledu model-pomiar; mniej = lepiej)")
+    print("=" * 84)
+    for variant, summary in all_summaries.items():
+        print(f"\n  wariant '{variant}' ({VARIANTS[variant]}):")
+        print(f"  {'metryka':<12} {'n':>3} {'RMSE przed':>12} {'RMSE po':>10} "
+              f"{'zmiana':>10}   ocena")
+        for label, unit, r0, r1, m0, m1, n in summary:
+            chg = (r1 - r0) / r0 * 100.0 if r0 > 1e-12 else np.nan
+            verdict = ("IDENTYCZNE" if abs(r1 - r0) < 1e-9 else
+                       "POPRAWA" if chg < -1 else
+                       "POGORSZENIE" if chg > 1 else "bez zmian")
+            print(f"  {label:<12} {n:>3} {r0:>12.1f} {r1:>10.1f} "
+                  f"{chg:>+9.1f}%   {verdict}")
+    print("=" * 84)
+
+    if do_plot:
+        for variant in all_summaries:
+            _plot(base, curr, metrics_for(variant), name, variant)
+    return 0
+
+
+def _compare_one(base, curr, metrics):
+    """Tabela per lot + RMSE dla jednego wariantu. Zwraca liste podsumowan."""
     summary = []
-    for pred_key, act_key, label, unit in METRICS:
+    for pred_key, act_key, label, unit in metrics:
         eb = err_stats(base, pred_key, act_key)
         ec = err_stats(curr, pred_key, act_key)
         common = sorted(set(eb) & set(ec))
@@ -241,51 +291,38 @@ def cmd_compare(name: str, do_plot: bool):
         print(f"  {'RAZEM':>4} {'':>10} {'':>10} {'':>10} "
               f"RMSE {rmse0:>7.1f} -> {rmse1:<7.1f} ({chg:+.1f}%)")
         summary.append((label, unit, rmse0, rmse1, mae0, mae1, len(common)))
+    return summary
 
-    print("\n" + "=" * 84)
-    print("PODSUMOWANIE (RMSE bledu model-pomiar; mniej = lepiej)")
-    print("=" * 84)
-    print(f"  {'metryka':<12} {'n':>3} {'RMSE przed':>12} {'RMSE po':>10} "
-          f"{'zmiana':>10}   ocena")
-    for label, unit, r0, r1, m0, m1, n in summary:
-        chg = (r1 - r0) / r0 * 100.0 if r0 > 1e-12 else np.nan
-        # Rozroznienie IDENTYCZNE vs "bez zmian" jest istotne: pierwsze znaczy
-        # "ta metryka nie zalezy od tego, co zmienilismy" (albo cos sie nie
-        # przeliczylo), drugie — "zalezy, ale efekt jest ponizej 1%".
-        verdict = ("IDENTYCZNE" if abs(r1 - r0) < 1e-9 else
-                   "POPRAWA" if chg < -1 else
-                   "POGORSZENIE" if chg > 1 else "bez zmian")
-        print(f"  {label:<12} {n:>3} {r0:>12.1f} {r1:>10.1f} {chg:>+9.1f}%   {verdict}")
-    print("=" * 84)
 
-    if do_plot:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        fig, axes = plt.subplots(1, len(METRICS), figsize=(4.2 * len(METRICS), 4.4))
-        if len(METRICS) == 1:
-            axes = [axes]
-        for ax, (pred_key, act_key, label, unit) in zip(axes, METRICS):
-            eb, ec = err_stats(base, pred_key, act_key), err_stats(curr, pred_key, act_key)
-            common = sorted(set(eb) & set(ec))
-            if not common:
-                ax.set_visible(False); continue
-            x = np.arange(len(common)); w = 0.38
-            ax.bar(x - w/2, [eb[f][2] for f in common], w, label=f"przed ({name})",
-                   color="tab:gray")
-            ax.bar(x + w/2, [ec[f][2] for f in common], w, label="po",
-                   color="tab:blue")
-            ax.axhline(0, color="k", lw=0.8)
-            ax.set_xticks(x); ax.set_xticklabels([str(f) for f in common], fontsize=8)
-            ax.set_xlabel("lot"); ax.set_ylabel(f"blad model-pomiar [{unit}]")
-            ax.set_title(label); ax.grid(alpha=0.3, axis="y"); ax.legend(fontsize=8)
-        fig.suptitle(f"Wplyw zmiany modelu na walidacje  ('{name}' -> aktualny)",
-                     fontsize=13, fontweight="bold")
-        fig.tight_layout()
-        p = RESULTS / f"validation_compare_{name}.png"
-        fig.savefig(p, dpi=130, bbox_inches="tight")
-        print(f"\nZapisano wykres: {p}")
-    return 0
+def _plot(base, curr, metrics, name, variant):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, axes = plt.subplots(1, len(metrics), figsize=(4.2 * len(metrics), 4.4))
+    if len(metrics) == 1:
+        axes = [axes]
+    for ax, (pred_key, act_key, label, unit) in zip(axes, metrics):
+        eb, ec = err_stats(base, pred_key, act_key), err_stats(curr, pred_key, act_key)
+        common = sorted(set(eb) & set(ec))
+        if not common:
+            ax.set_visible(False); continue
+        x = np.arange(len(common)); w = 0.38
+        ax.bar(x - w/2, [eb[f][2] for f in common], w, label=f"przed ({name})",
+               color="tab:gray")
+        ax.bar(x + w/2, [ec[f][2] for f in common], w, label="po",
+               color="tab:blue")
+        ax.axhline(0, color="k", lw=0.8)
+        ax.set_xticks(x); ax.set_xticklabels([str(f) for f in common], fontsize=8)
+        ax.set_xlabel("lot"); ax.set_ylabel(f"blad model-pomiar [{unit}]")
+        ax.set_title(label); ax.grid(alpha=0.3, axis="y"); ax.legend(fontsize=8)
+    fig.suptitle(f"Wplyw zmiany modelu na walidacje  ('{name}' -> aktualny) "
+                 f"— wariant {variant} ({VARIANTS.get(variant, '')})",
+                 fontsize=13, fontweight="bold")
+    fig.tight_layout()
+    p = RESULTS / f"validation_compare_{name}_{variant}.png"
+    fig.savefig(p, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Zapisano wykres: {p}")
 
 
 def main():
