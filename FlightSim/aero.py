@@ -241,12 +241,16 @@ def _compute_cmq_table(result_full, out_body, cfg):
       CNA_fins = CNA_full - CNA_body   [1/deg]
       x_fins   = środek cięciwy płetw wzdłuż osi [m od nosa]
       xcg      = xcg z pliku DATCOM
-      lref     = lref z pliku DATCOM
+      d        = srednica kadluba (JEDYNA dlugosc odniesienia tutaj)
 
-      Cmq = -2 * CNA_fins_rad * ((x_fins - xcg) / lref)²
-            * lref / d_ref
+      Cmq = -2 * CNA_fins_rad * ((x_fins - xcg) / d)²
+      Clp = -n_fins * CNA_fins_rad * (r_fin_mid / d)²
 
     gdzie CNA_fins_rad = CNA_fins * (180/pi) — przeliczenie z 1/deg na 1/rad.
+
+    LREF z pliku DATCOM celowo NIE wystepuje w tych wzorach — model normalizuje
+    tlumienie srednica, wiec mieszanie obu dlugosci bylo zrodlem bledu 18.4x
+    (patrz komentarz przy wzorach nizej).
 
     Returns
     -------
@@ -327,21 +331,34 @@ def _compute_cmq_table(result_full, out_body, cfg):
     else:
         return None
 
-    # arm = (x_fins - xcg) / lref — znormalizowane
-    arm = (x_fins - xcg) / lref
-
     # CNA_fins [1/deg] → [1/rad]
     CNA_fins_rad = CNA_fins * (180.0 / np.pi)
 
-    # Cmq = -2 * CNA_fins_rad * ((x_fins - xcg) / lref)² * lref/d
-    Cmq_table = -2.0 * CNA_fins_rad * (arm ** 2) * (lref / d)
+    # ---- Normalizacja: WSZYSTKO przez SREDNICE, nie przez lref ----------- #
+    # Model liczy tlumienie jako Cmq * (q*d_ref/(2V)) * q_dyn*S_ref*d_ref
+    # (models/aerodynamics.py:205, forces/force_model6.py:261), czyli oczekuje
+    # pochodnych znormalizowanych PRZEZ SREDNICE. Wyprowadzenie:
+    #
+    #   pitch: dM = -(q*S_fin*CNa*(q_rate*arm/V))*arm,  q_hat = q_rate*d/(2V)
+    #          => Cmq = -2 * CNA_fins * ((x_fins - xcg)/d)^2
+    #   roll:  dL = -(q*S_fin*CNa_1fin*(p*r/V))*r,      p_hat = p*d/(2V)
+    #          => Clp = -2 * n * CNa_1fin * (r/d)^2
+    #          a poniewaz CNA_fins to wklad CALEGO zestawu w sile normalna,
+    #          w ukladzie krzyzowym nosza ja 2 z 4 pletw (CNa_1fin ~ CNA_fins/2),
+    #          podczas gdy toczenie tlumia wszystkie 4:
+    #          => Clp = -2 * 4 * (CNA_fins/2) * (r/d)^2 = -n * CNA_fins * (r/d)^2
+    #
+    # Wczesniej byly tu czynniki (lref/d) i (d/lref) z lref WCZYTANYM Z PLIKU
+    # DATCOM. Przy LREF = dlugosc kadluba dawaly Cmq i Clp 18.4x za male; po
+    # poprawce LREF (lref == d) wychodza poprawnie, ale tylko PRZYPADKIEM —
+    # kazda przyszla zmiana LREF po cichu przeskalowalaby tlumienie.
+    # Dlatego lref nie wystepuje juz w tych wzorach w ogole.
+    arm_d = (x_fins - xcg) / d
+    Cmq_table = -2.0 * CNA_fins_rad * (arm_d ** 2)
 
-    # Clp = -n_fins * CNA_fins_rad * (r_fin_mid / d)² * (d / lref)
     # r_fin_mid = r_body + span/2  [m]
     r_fin_mid = cfg.body.diameter / 2.0 + fin.span / 2.0
-    Clp_table = (-int(fin.count) * CNA_fins_rad *
-                 (r_fin_mid / d) ** 2 *
-                 (d / lref))
+    Clp_table = -int(fin.count) * CNA_fins_rad * (r_fin_mid / d) ** 2
 
     print(f"[aero] Clp(alpha,Mach) obliczone analitycznie z CNA_fins")
     print(f"       Clp @ alpha=0, Mach[0]: {Clp_table[len(Clp_table)//2, 0]:.4f}")

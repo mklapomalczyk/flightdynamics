@@ -30,6 +30,7 @@ CONTROL_TESTS = [
     ("test_gam_baseline_compare.py", "A/B usuniecia GAM"),
 ]
 REGRESSION_TESTS = [
+    ("test_damping_reference.py", "normalizacja Cmq/Clp przez srednice"),
     ("test_gyroscopic.py",   "efekty zyroskopowe"),
     ("test_3dof_vs_6dof.py", "zgodnosc 3DOF/6DOF"),
     ("test_energy.py",       "bilans energii"),
