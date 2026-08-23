@@ -186,7 +186,11 @@ def cmd_compare(name: str, do_plot: bool):
         print("     migawke jeszcze raz;")
         print("  b) walidacja nie zostala przeliczona po zmianie modelu —")
         print("     uruchom: python telemetry_analysis/analyze_per_flight_6dof.py")
-        print("     i dopiero potem porownanie.")
+        print("     i dopiero potem porownanie;")
+        print("  c) zmiana byla sterowana zmienna srodowiskowa")
+        print("     (FLIGHTSIM_LREF_MODE), ktora nie dotarla do Pythona — w")
+        print("     PowerShell `set` to alias Set-Variable i NIE tworzy zmiennej")
+        print("     srodowiskowej. Sprawdz: python check_lref_mode.py")
         return 2
 
     if meta.get("source_mtime") and src.stat().st_mtime <= meta["source_mtime"] + 1:
