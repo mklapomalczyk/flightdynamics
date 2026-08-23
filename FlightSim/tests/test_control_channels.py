@@ -30,9 +30,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from control import (AeroSurfaceEffector, ControlDerivTable, ControlSystem,
-                     PassthroughActuator, StepCommander)
+                     PassthroughActuator, SecondOrderActuator, StepCommander,
+                     build_actuator_from_config)
 from control.demo_model import build_demo_model, fly_demo
 from control.types import FlightState
+from datcom_io.config_reader import ActuatorConfig
 
 PASS = FAIL = SKIP = 0
 AMPS = [2.0, 5.0, 8.0]
@@ -164,6 +166,74 @@ rel = float(np.max(np.abs(my - mp) / np.maximum(mp, 1e-12)))
 print(f"\nSymetria pitch/yaw: max rozjazd momentu = {rel*100:.2f}%")
 check("moment pitch i yaw rowny co do modulu (uklad krzyzowy, <5%)", rel < 0.05,
       f"(rozjazd {rel*100:.2f}%)")
+
+# ===========================================================================
+# KONFIGURACJA Z YAML — build_actuator_from_config
+# ===========================================================================
+print("\n" + "=" * 72)
+print("KONFIGURACJA AKTUATORA Z YAML")
+print("=" * 72)
+
+act_z = build_actuator_from_config(ActuatorConfig(type="zero_order"))
+check("zero_order -> PassthroughActuator", isinstance(act_z, PassthroughActuator))
+check("zero_order: n_states=0", act_z.n_states == 0)
+
+act_2 = build_actuator_from_config(ActuatorConfig(
+    type="second_order", wn=50.0, zeta=0.8, rate_limit_deg_s=300.0, pos_limit_deg=12.0))
+check("second_order -> SecondOrderActuator", isinstance(act_2, SecondOrderActuator))
+check("second_order: wn z konfiguracji", act_2.wn == 50.0)
+check("second_order: zeta z konfiguracji", act_2.zeta == 0.8)
+check("second_order: rate_limit z konfiguracji", act_2.rate_limit == 300.0)
+check("second_order: pos_limit z konfiguracji", act_2.pos_limit == 12.0)
+check("second_order: n_states=6", act_2.n_states == 6)
+
+act_none = build_actuator_from_config(None)
+check("None -> PassthroughActuator", isinstance(act_none, PassthroughActuator))
+
+# ===========================================================================
+# TRZY KANALY Z SERWEM 2. RZEDU
+# ===========================================================================
+print("\n" + "=" * 72)
+print("KANALY STEROWANIA — serwo 2. rzedu (wn=30, zeta=0.7)")
+print(f"impuls {T_DUR:.0f}s od t={T_STEP:.0f}s, przebieg {T_MAX:.0f}s, "
+      f"wychylenia {AMPS} deg")
+print("=" * 72)
+
+act2_cfg = ActuatorConfig(type="second_order", wn=30.0, zeta=0.7,
+                          rate_limit_deg_s=400.0, pos_limit_deg=15.0)
+act2 = build_actuator_from_config(act2_cfg)
+
+results_2nd = {}
+for channel, (lbl, rate_at, m_axis, u_idx) in CHANNELS.items():
+    print(f"\n{lbl} (2nd order)")
+    peak_rate_2 = []
+
+    for amp in AMPS:
+        cs = ControlSystem(StepCommander(T_STEP, amp, channel, duration_s=T_DUR),
+                           act2, [eff])
+        res = fly_demo(cs, t_max=T_MAX)
+
+        check(f"{lbl} {amp:.0f} deg 2nd: przebieg zakonczony poprawnie",
+              res.status == "ok", f"(status={res.status})")
+
+        rates = {ax: induced(res, ax) for ax in (0, 1, 2)}
+        peak_rate_2.append(rates[m_axis])
+
+        check(f"{lbl} {amp:.0f} deg 2nd: sterowana os reaguje najmocniej",
+              rates[m_axis] > max(v for ax, v in rates.items() if ax != m_axis),
+              f"(os={np.degrees(rates[m_axis]):.1f} deg/s)")
+
+    check(f"{lbl} 2nd: odpowiedz rosnie z amplituda",
+          peak_rate_2[0] < peak_rate_2[1] < peak_rate_2[2],
+          f"({[round(np.degrees(v),1) for v in peak_rate_2]} deg/s)")
+
+    # Trailing response: 2nd-order actuator gives different response than passthrough
+    pt_rate = results[lbl][1]
+    check(f"{lbl} 2nd: odpowiedz rozni sie od passthrough",
+          abs(peak_rate_2[1] - pt_rate[1]) > 1e-4,
+          f"(2nd={np.degrees(peak_rate_2[1]):.2f} vs PT={np.degrees(pt_rate[1]):.2f} deg/s)")
+
+    results_2nd[lbl] = peak_rate_2
 
 print("\n" + "=" * 72)
 total = PASS + FAIL

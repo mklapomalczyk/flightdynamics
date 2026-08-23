@@ -20,7 +20,7 @@ from .commander import Commander, ZeroCommander, StepCommander, ConstantCommande
 from .actuator import Actuator, PassthroughActuator, SecondOrderActuator
 from .effectors import Effector, AeroSurfaceEffector
 from .derivatives import ControlDerivTable, PANEL_PATTERNS, fit_derivative_from_sweep
-from .system import ControlSystem
+from .system import ControlSystem, build_actuator_from_config
 
 __all__ = [
     "ControlCommand", "ControlWrench", "FlightState",
@@ -28,5 +28,5 @@ __all__ = [
     "Actuator", "PassthroughActuator", "SecondOrderActuator",
     "Effector", "AeroSurfaceEffector",
     "ControlDerivTable", "PANEL_PATTERNS", "fit_derivative_from_sweep",
-    "ControlSystem",
+    "ControlSystem", "build_actuator_from_config",
 ]

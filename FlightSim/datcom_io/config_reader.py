@@ -91,6 +91,16 @@ class ControlSurface:
 
 
 @dataclass
+class ActuatorConfig:
+    """Konfiguracja aktuatora — parsowana z YAML."""
+    type:              str   = "zero_order"
+    wn:                float = 60.0
+    zeta:              float = 0.7
+    rate_limit_deg_s:  float = 400.0
+    pos_limit_deg:     float = 15.0
+
+
+@dataclass
 class DualSpinSection:
     """Parametry jednej sekcji rakiety dual-spin."""
     mass: float         # [kg]
@@ -155,6 +165,7 @@ class RocketConfig:
     fins:             List[FinSet]
     mass:             Mass
     control_surfaces: List[ControlSurface] = field(default_factory=list)
+    actuator:         Optional["ActuatorConfig"]   = None
     mass_model:       Optional["MassModelConfig"]  = None
     propulsion:       Optional["PropulsionConfig"] = None
     dual_spin:        Optional["DualSpinConfig"]   = None
@@ -245,6 +256,18 @@ def load_config(yaml_path: Path) -> RocketConfig:
             channel_map= cs.get("channel_map", None),
         ))
 
+    # ---- Actuator ------------------------------------------------------ #
+    act_data = data.get("actuator", None)
+    actuator_cfg = None
+    if act_data is not None:
+        actuator_cfg = ActuatorConfig(
+            type             = str(act_data.get("type", "zero_order")),
+            wn               = float(act_data.get("wn", 60.0)),
+            zeta             = float(act_data.get("zeta", 0.7)),
+            rate_limit_deg_s = float(act_data.get("rate_limit_deg_s", 400.0)),
+            pos_limit_deg    = float(act_data.get("pos_limit_deg", 15.0)),
+        )
+
     # ---- Mass --------------------------------------------------------- #
     mass = Mass(xcg_ref=float(data["mass"]["xcg_ref"]))
 
@@ -302,6 +325,7 @@ def load_config(yaml_path: Path) -> RocketConfig:
         fins              = fins,
         mass              = mass,
         control_surfaces  = control,
+        actuator          = actuator_cfg,
         mass_model        = mass_model,
         dual_spin         = dual_spin,
         propulsion        = propulsion,

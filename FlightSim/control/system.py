@@ -17,7 +17,7 @@ from typing import List, Optional, Sequence
 
 import numpy as np
 
-from .actuator import Actuator, PassthroughActuator
+from .actuator import Actuator, PassthroughActuator, SecondOrderActuator
 from .commander import Commander, ZeroCommander
 from .effectors.base import Effector
 from .types import ControlWrench, FlightState
@@ -62,3 +62,19 @@ class ControlSystem:
             return np.zeros(0)
         cmd = self.commander.command(fs)
         return self.actuator.derivatives(cmd, fs, xa)
+
+
+def build_actuator_from_config(act_cfg, n_channels: int = 3) -> Actuator:
+    """Tworzy aktuator z ActuatorConfig (datcom_io/config_reader.py)."""
+    if act_cfg is None or act_cfg.type == "zero_order":
+        return PassthroughActuator()
+    if act_cfg.type == "second_order":
+        return SecondOrderActuator(
+            n_channels       = n_channels,
+            wn               = act_cfg.wn,
+            zeta             = act_cfg.zeta,
+            rate_limit_deg_s = act_cfg.rate_limit_deg_s,
+            pos_limit_deg    = act_cfg.pos_limit_deg,
+        )
+    raise ValueError(f"Nieznany typ aktuatora: {act_cfg.type!r} "
+                     f"(dozwolone: 'zero_order', 'second_order')")

@@ -70,6 +70,17 @@ control:
   # Zakres uznawany za liniowy przy dopasowaniu pochodnych sterowania.
   linear_fit_range_deg: 6.0
 
+# ---- Aktuator (serwo) ------------------------------------------------ #
+# type: "zero_order"   — komenda przechodzi na wylot (bez opoznienia)
+# type: "second_order" — serwo 2. rzedu z dynamika i ograniczeniami
+actuator:
+  type: zero_order
+  # Parametry ponizej uzywane tylko dla type: second_order
+  # wn:               60.0     # czestotliwosc wlasna [rad/s]
+  # zeta:             0.7      # wspolczynnik tlumienia [-]
+  # rate_limit_deg_s: 400.0    # ograniczenie predkosci [deg/s]
+  # pos_limit_deg:    15.0     # ograniczenie wychylenia [deg]
+
 # ---- Masa i środek ciężkości ----------------------------------------- #
 # xcg_ref: wartość referencyjna dla DATCOM (np. xcg przy pustym)
 # Model dynamiki używa xcg(t) z mass_model — nie z tego pliku
