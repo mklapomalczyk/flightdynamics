@@ -16,6 +16,7 @@ Obsługuje:
 
 from __future__ import annotations
 import math
+import os
 from pathlib import Path
 from datcom_io.config_reader import RocketConfig
 
@@ -183,9 +184,21 @@ def generate_missile_datcom_input(
     #
     # UWAGA: XCP jest raportowany W JEDNOSTKACH LREF, wiec czytnik
     # (xcp_m = xcg - xcp_cal*lref) automatycznie pozostaje spojny.
+    #
+    # FLIGHTSIM_LREF_MODE=length odtwarza STARE (bledne) zachowanie. Istnieje
+    # wylacznie po to, zeby dalo sie policzyc walidacje "przed" i porownac ja z
+    # "po" (compare_validation.py) bez cofania sie w gicie. Do normalnej pracy
+    # NIE uzywac — dlatego jest glosne ostrzezenie i dlatego aero.py i tak
+    # zazada FLIGHTSIM_ALLOW_STALE_LREF=1, zeby taki wynik wpuscic do modelu.
+    lref = d
+    if os.environ.get("FLIGHTSIM_LREF_MODE", "").lower() == "length":
+        lref = l
+        print(f"[MissileDatcom] UWAGA: FLIGHTSIM_LREF_MODE=length — LREF="
+              f"{lref:.4f} m (dlugosc kadluba). To STARA, BLEDNA normalizacja, "
+              f"tylko do porownan walidacyjnych.")
     lines.append(f" $REFQ    XCG={xcg:.4f},")
     lines.append(f"          SREF={S:.7f},")
-    lines.append(f"          LREF={d:.4f},")
+    lines.append(f"          LREF={lref:.4f},")
     lines.append(f"          RHR=0.,$")
     lines.append("")
 
