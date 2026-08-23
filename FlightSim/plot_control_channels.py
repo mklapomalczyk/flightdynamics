@@ -19,8 +19,10 @@ Wazne przy czytaniu wynikow:
     katowe — roll z natury reaguje ostrzej niz pitch/yaw.
 
 Uzycie:
-    python plot_control_channels.py
-    python plot_control_channels.py --show
+    python plot_control_channels.py                        # zero_order (passthrough)
+    python plot_control_channels.py --actuator second_order # serwo 2. rzedu
+    python plot_control_channels.py --actuator yaml         # z konfiguracji YAML
+    python plot_control_channels.py --show                  # pokaz wykresy
 """
 
 from __future__ import annotations
@@ -41,8 +43,10 @@ if "--show" not in sys.argv:
 import matplotlib.pyplot as plt
 
 from control import (AeroSurfaceEffector, ControlSystem, PassthroughActuator,
-                     StepCommander)
+                     SecondOrderActuator, StepCommander,
+                     build_actuator_from_config)
 from control.demo_model import build_demo_model, fly_demo
+from datcom_io.config_reader import load_config
 
 OUT_DIR = ROOT / "results"
 CTRL_DIR = ROOT / "datcom_runs" / "rocket_70mm_canards"
@@ -78,10 +82,11 @@ def load_table():
                                      linear_range_deg=6.0, verbose=False)
 
 
-def run_case(table, geom, channel, amp):
+def run_case(table, geom, channel, amp, actuator=None):
     eff = AeroSurfaceEffector.from_geometry(table, geom)
+    act = actuator if actuator is not None else PassthroughActuator()
     cs = ControlSystem(StepCommander(T_STEP, amp, channel, duration_s=T_DUR),
-                       PassthroughActuator(), [eff])
+                       act, [eff])
     return fly_demo(cs, t_max=T_MAX)
 
 
@@ -110,16 +115,36 @@ def moment_history(table, geom, res, channel, amp):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--show", action="store_true")
+    ap.add_argument("--actuator", choices=["zero_order", "second_order", "yaml"],
+                    default="zero_order",
+                    help="Typ aktuatora: zero_order (passthrough), second_order, "
+                         "lub yaml (wczytaj z rocket_70mm_canards.yaml)")
     args = ap.parse_args()
 
     OUT_DIR.mkdir(exist_ok=True)
     table = load_table()
     geom = build_demo_model(None).geom
+
+    # Aktuator
+    if args.actuator == "yaml":
+        cfg = load_config(str(ROOT / "configurations" / "rocket_70mm_canards.yaml"))
+        actuator = build_actuator_from_config(cfg.actuator)
+        act_label = f"z YAML ({cfg.actuator.type})" if cfg.actuator else "z YAML (domyslny)"
+    elif args.actuator == "second_order":
+        actuator = SecondOrderActuator(n_channels=3, wn=60.0, zeta=0.7,
+                                       rate_limit_deg_s=400.0, pos_limit_deg=15.0)
+        act_label = f"second_order (wn={actuator.wn}, zeta={actuator.zeta}, " \
+                    f"rate={actuator.rate_limit} deg/s, pos={actuator.pos_limit} deg)"
+    else:
+        actuator = PassthroughActuator()
+        act_label = "zero_order (passthrough)"
+
     print("=" * 74)
     print(f"TEST KANALOW STEROWANIA — impuls {T_DUR:.0f}s od t={T_STEP:.0f}s, "
           f"przebieg {T_MAX:.0f}s, wychylenia {AMPS} deg")
     print(f"S_ref={geom.S_ref:.6f} m^2  d_ref={geom.d_ref:.4f} m "
           f"(z geometrii modelu, nie z LREF DATCOM)")
+    print(f"Aktuator: {act_label}")
     print("=" * 74)
 
     r_off = fly_demo(None, t_max=T_MAX)
@@ -128,12 +153,12 @@ def main():
     for channel, (lbl, rate_at, ang_at, mom_lbl, _ui, _mi) in CHANNELS.items():
         fig, ax = plt.subplots(2, 2, figsize=(13, 8))
         fig.suptitle(f"Kanal {lbl} — impuls {T_DUR:.0f} s od t={T_STEP:.0f} s "
-                     f"(pochodne z DATCOM)", fontsize=13, fontweight="bold")
+                     f"(aktuator: {args.actuator})", fontsize=13, fontweight="bold")
         colors = ["tab:blue", "tab:orange", "tab:red"]
         rows = []
 
         for amp, col in zip(AMPS, colors):
-            res = run_case(table, geom, channel, amp)
+            res = run_case(table, geom, channel, amp, actuator)
             mom = moment_history(table, geom, res, channel, amp)
             rate = np.degrees(getattr(res, rate_at))
             ang = unwrap_deg(getattr(res, ang_at))
