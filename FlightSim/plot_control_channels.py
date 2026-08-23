@@ -87,7 +87,33 @@ def run_case(table, geom, channel, amp, actuator=None):
     act = actuator if actuator is not None else PassthroughActuator()
     cs = ControlSystem(StepCommander(T_STEP, amp, channel, duration_s=T_DUR),
                        act, [eff])
-    return fly_demo(cs, t_max=T_MAX)
+    return fly_demo(cs, t_max=T_MAX), act
+
+
+def actual_deflection_history(t_arr, channel, amp, actuator):
+    """Rzeczywiste wychylenie aktuatora wzdluz osi czasu (symulacja ODE)."""
+    from control.types import ControlCommand, FlightState
+    u_idx = CHANNELS[channel][4]
+    cmd_fn = StepCommander(T_STEP, amp, channel, duration_s=T_DUR)
+
+    if actuator.n_states == 0:
+        out = np.zeros(len(t_arr))
+        for i, t in enumerate(t_arr):
+            fs = FlightState(t=t)
+            cmd = cmd_fn.command(fs)
+            out[i] = float(cmd.u[u_idx])
+        return out
+
+    xa = actuator.initial_state().copy()
+    out = np.zeros(len(t_arr))
+    for i, t in enumerate(t_arr):
+        fs = FlightState(t=t)
+        cmd = cmd_fn.command(fs)
+        out[i] = float(actuator.output(cmd, fs, xa)[u_idx])
+        dt = (t_arr[i + 1] - t) if i + 1 < len(t_arr) else 0.01
+        dxa = actuator.derivatives(cmd, fs, xa)
+        xa = xa + dxa * dt
+    return out
 
 
 def moment_history(table, geom, res, channel, amp):
@@ -158,22 +184,21 @@ def main():
         rows = []
 
         for amp, col in zip(AMPS, colors):
-            res = run_case(table, geom, channel, amp, actuator)
+            res, _act = run_case(table, geom, channel, amp, actuator)
             mom = moment_history(table, geom, res, channel, amp)
             rate = np.degrees(getattr(res, rate_at))
             ang = unwrap_deg(getattr(res, ang_at))
             ang_off = unwrap_deg(getattr(r_off, ang_at))
-            # Predkosc katowa MUSI byc liczona jako roznica wzgledem przebiegu
-            # bez sterowania. W kanale pitch tlo (zakret grawitacyjny) to ~9 deg/s
-            # i przy malych wychyleniach calkowicie zaslania odpowiedz na komende,
-            # przez co pitch wygladal na 4x mniej skuteczny niz yaw, gdzie tlo
-            # jest zerowe. To byl artefakt metryki, nie asymetria modelu.
             d_rate = rate - np.interp(res.t, r_off.t,
                                       np.degrees(getattr(r_off, rate_at)))
 
-            ax[0, 0].plot(res.t, np.where((res.t >= T_STEP) &
-                                          (res.t < T_STEP + T_DUR), amp, 0.0),
-                          color=col, lw=1.6, label=f"{amp:.0f} deg")
+            cmd_trace = np.where((res.t >= T_STEP) &
+                                 (res.t < T_STEP + T_DUR), amp, 0.0)
+            ax[0, 0].plot(res.t, cmd_trace,
+                          color=col, lw=1.6, label=f"{amp:.0f} deg cmd")
+            act_trace = actual_deflection_history(res.t, channel, amp, actuator)
+            ax[0, 0].plot(res.t, act_trace,
+                          color=col, lw=1.2, ls="--", label=f"{amp:.0f} deg act")
             ax[0, 1].plot(res.t, mom, color=col, lw=1.6, label=f"{amp:.0f} deg")
             ax[1, 0].plot(res.t, rate, color=col, lw=1.5, label=f"{amp:.0f} deg")
             ax[1, 1].plot(res.t, ang, color=col, lw=1.5, label=f"{amp:.0f} deg")
@@ -188,7 +213,7 @@ def main():
         for a in ax.ravel():
             a.axvspan(T_STEP, T_STEP + T_DUR, color="tab:blue", alpha=0.10)
             a.grid(alpha=0.3); a.legend(fontsize=8)
-        ax[0, 0].set_ylabel("wychylenie [deg]"); ax[0, 0].set_title("Komenda")
+        ax[0, 0].set_ylabel("wychylenie [deg]"); ax[0, 0].set_title("Komenda / wychylenie rzeczywiste")
         ax[0, 1].set_ylabel(f"{mom_lbl} [N*m]"); ax[0, 1].set_title("Moment sterowania")
         ax[1, 0].set_ylabel(f"{rate_at} [deg/s]"); ax[1, 0].set_xlabel("czas [s]")
         ax[1, 0].set_title("Predkosc katowa")
