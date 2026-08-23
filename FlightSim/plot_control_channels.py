@@ -124,21 +124,24 @@ def actual_deflection_history(t_arr, channel, amp, actuator):
     return out
 
 
-def moment_history(table, geom, res, channel, amp):
-    """Moment sterowania odtworzony wzdluz trajektorii (do wykresu)."""
+def moment_history(table, geom, res, channel, amp, actuator=None):
+    """Moment sterowania odtworzony wzdluz trajektorii z RZECZYWISTYM
+    wychyleniem aktuatora (nie komenda)."""
     from control.types import FlightState
     from models.atmosphere import create_atmosphere
     eff = AeroSurfaceEffector.from_geometry(table, geom)
     atm = create_atmosphere("ISA")
     u_idx, m_axis = CHANNELS[channel][4], CHANNELS[channel][5]
-    t_end = T_STEP + T_DUR
+    act_trace = actual_deflection_history(res.t, channel, amp, actuator
+                                          if actuator is not None
+                                          else PassthroughActuator())
     out = np.zeros(len(res.t))
     for i, t in enumerate(res.t):
-        if not (T_STEP <= t < t_end):
+        if abs(act_trace[i]) < 1e-12:
             continue
         a = atm.at(-res.z[i])
         spd = float(res.speed[i])
-        u = np.zeros(3); u[u_idx] = amp
+        u = np.zeros(3); u[u_idx] = act_trace[i]
         fs = FlightState(t=t, alpha=float(res.alpha[i]), beta=float(res.beta[i]),
                          mach=a.mach(spd), q_dyn=0.5 * a.density * spd ** 2,
                          speed=spd)
@@ -193,7 +196,7 @@ def main():
 
         for amp, col in zip(AMPS, colors):
             res, _act = run_case(table, geom, channel, amp, actuator)
-            mom = moment_history(table, geom, res, channel, amp)
+            mom = moment_history(table, geom, res, channel, amp, actuator)
             rate = np.degrees(getattr(res, rate_at))
             ang = unwrap_deg(getattr(res, ang_at))
             ang_off = unwrap_deg(getattr(r_off, ang_at))
