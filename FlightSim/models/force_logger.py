@@ -86,6 +86,7 @@ class ForceLogger:
         "M_ctrl_yaw",      # moment sterowania yaw   [N·m]
         # Zadane wychylenia powierzchni sterowych [deg]
         "d_pitch_cmd", "d_yaw_cmd", "d_roll_cmd",
+        "d_pitch_act", "d_yaw_act", "d_roll_act",
         "M_thrust_pitch", "M_thrust_yaw",
         "MX", "MY", "MZ",
     ]

@@ -49,4 +49,16 @@ class ControlSystem:
         out = ControlWrench()
         for eff in self.effectors:
             out = out + eff.wrench(u, fs)
+        g = lambda i: float(cmd.u[i]) if len(cmd.u) > i else 0.0
+        out.diag["d_pitch_cmd"] = g(0)
+        out.diag["d_yaw_cmd"] = g(1)
+        out.diag["d_roll_cmd"] = g(2)
         return out
+
+    def actuator_derivatives(self, fs: FlightState,
+                             xa: Optional[np.ndarray] = None) -> np.ndarray:
+        """Pochodne stanow aktuatora (pusty wektor gdy bezstanowy)."""
+        if not self.enabled or self.n_states == 0:
+            return np.zeros(0)
+        cmd = self.commander.command(fs)
+        return self.actuator.derivatives(cmd, fs, xa)

@@ -38,10 +38,12 @@ def run_simulation_6dof(
         Poziom gruntu w konwencji Z-dół [m].
         Domyślnie 1.0 — lekko powyżej zera, żeby nie wyzwalać na starcie.
     """
-    # Wektor stanu zawsze ma 14 elementów (rail_dist = 0 gdy brak szyny).
-    # derivatives() zawsze zwraca 14 elementów — spójność z solve_ivp.
     _dual_spin_active = getattr(force_model, "_dual_spin", None) is not None
     x0 = initial_state.to_numpy(include_rail=True, include_pfwd=_dual_spin_active)
+    _n_ctrl = int(getattr(force_model, "_n_ctrl_states", 0))
+    if _n_ctrl > 0:
+        ctrl_x0 = force_model.control.actuator.initial_state()
+        x0 = np.append(x0, ctrl_x0)
     if _dual_spin_active:
         rtol = max(rtol, 1e-4)
         atol = max(atol, 1e-6)

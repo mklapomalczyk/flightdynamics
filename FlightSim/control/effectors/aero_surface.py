@@ -129,7 +129,7 @@ class AeroSurfaceEffector(Effector):
     def _diag(u, Mx, My, Mz) -> dict:
         g = lambda i: float(u[i]) if len(u) > i else 0.0
         return {
-            "d_pitch_cmd": g(0), "d_yaw_cmd": g(1), "d_roll_cmd": g(2),
+            "d_pitch_act": g(0), "d_yaw_act": g(1), "d_roll_act": g(2),
             "M_ctrl_roll": float(Mx), "M_ctrl": float(My),
             "M_ctrl_yaw": float(Mz),
         }

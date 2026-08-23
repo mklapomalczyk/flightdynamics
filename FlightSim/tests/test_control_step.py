@@ -226,6 +226,79 @@ d_theta_neg = np.degrees(r_neg.theta[-1] - r_none.theta[-1])
 check("Cm_delta<0 -> theta w przeciwna strone", d_theta_neg < 0.0,
       f"(dtheta={d_theta_neg:.3f} deg)")
 
+# --- 6. Serwo 2. rzedu -------------------------------------------------------
+print("\n6. SecondOrderActuator — dynamika i ograniczenia")
+from control import SecondOrderActuator
+
+# 6a. Podstawowe wlasciwosci
+act2 = SecondOrderActuator(n_channels=3, wn=60.0, zeta=0.7,
+                           rate_limit_deg_s=400.0, pos_limit_deg=15.0)
+check("n_states = 2 * n_channels", act2.n_states == 6)
+check("initial_state = zera", np.allclose(act2.initial_state(), 0.0))
+
+# 6b. Output bierze pozycje z xa, nie z komendy
+xa = np.array([5.0, 0.0, -3.0, 0.0, 1.5, 0.0])  # [delta, delta_dot] x 3
+from control.types import ControlCommand
+cmd_test = ControlCommand(t=0.0, u=np.array([10.0, 10.0, 10.0]),
+                          channels=("d_pitch", "d_yaw", "d_roll"))
+out = act2.output(cmd_test, fs0, xa)
+check("output = pozycja z xa, nie z komendy",
+      np.allclose(out, [5.0, -3.0, 1.5]),
+      f"(out={out})")
+
+# 6c. Pochodne: delta_dot = xa[1], ddot = wn^2*(cmd-delta) - 2*zeta*wn*delta_dot
+xa0 = np.zeros(6)  # wszystko w zerze
+cmd1 = ControlCommand(t=0.0, u=np.array([5.0, 0.0, 0.0]),
+                      channels=("d_pitch", "d_yaw", "d_roll"))
+dxa = act2.derivatives(cmd1, fs0, xa0)
+check("dxa[0] = delta_dot = 0 (startowy)", abs(dxa[0]) < 1e-12)
+expected_ddot = 60.0**2 * (5.0 - 0.0) - 2*0.7*60.0*0.0
+check("dxa[1] = wn^2*(cmd-delta)", abs(dxa[1] - expected_ddot) < 1e-6,
+      f"(dxa[1]={dxa[1]:.1f}, expected={expected_ddot:.1f})")
+check("kanaly 2,3 zerowe gdy cmd=0", abs(dxa[2]) < 1e-12 and abs(dxa[4]) < 1e-12)
+
+# 6d. Rate limiting — szybka predkosc obcieta do ±400 deg/s
+xa_fast = np.array([0.0, 500.0, 0.0, -500.0, 0.0, 0.0])
+dxa_fast = act2.derivatives(cmd1, fs0, xa_fast)
+check("rate limit: delta_dot obcieta do +400",
+      abs(dxa_fast[0] - 400.0) < 1e-9, f"({dxa_fast[0]:.1f})")
+check("rate limit: delta_dot obcieta do -400",
+      abs(dxa_fast[2] - (-400.0)) < 1e-9, f"({dxa_fast[2]:.1f})")
+
+# 6e. Position limiting — na granicy pozycji, ruch w kierunku nie jest mozliwy
+xa_lim = np.array([15.0, 10.0, -15.0, -10.0, 0.0, 0.0])
+dxa_lim = act2.derivatives(cmd1, fs0, xa_lim)
+check("pos limit: ruch w kierunku granicy zablokowany (ch0)",
+      abs(dxa_lim[0]) < 1e-12, f"(dxa_lim[0]={dxa_lim[0]:.4f})")
+check("pos limit: ruch w kierunku granicy zablokowany (ch1)",
+      abs(dxa_lim[2]) < 1e-12, f"(dxa_lim[2]={dxa_lim[2]:.4f})")
+
+# 6f. End-to-end z modelem 6DOF — step z serwem 2. rzedu
+print("\n6f. End-to-end: step z serwem 2. rzedu")
+ctrl_2nd = ControlSystem(
+    StepCommander(3.0, +2.0, "d_pitch", duration_s=1.0),
+    SecondOrderActuator(3, wn=15.0, zeta=0.7),
+    [AeroSurfaceEffector(synthetic_table(Cm_d=+1.0))])
+r_2nd = fly(ctrl_2nd, t_max=8.0)
+check("symulacja z serwem 2. rzedu zakonczyla sie poprawnie",
+      r_2nd.status == "ok", f"(status={r_2nd.status})")
+
+# Przed impulsem: trajektoria identyczna z control=None
+pre_mask = r_2nd.t < 2.9
+check("przed impulsem: zgodne z control=None",
+      np.allclose(r_2nd.theta[pre_mask], r_none.theta[pre_mask], atol=1e-8))
+
+# Po impulsie: ta sama zmiana znaku co passthrough, ale mniejsza (lag serwa)
+d_theta_2nd = np.degrees(r_2nd.theta[-1] - r_none.theta[-1])
+check("po impulsie: theta odchylona (ten sam znak co passthrough)",
+      d_theta_2nd > 0.0, f"(dtheta={d_theta_2nd:.3f} deg)")
+check("serwo 2. rzedu: odpowiedz rozni sie od passthrough (dynamika serwa)",
+      abs(d_theta_2nd - d_theta) > 0.001,
+      f"(2nd={d_theta_2nd:.3f} vs PT={d_theta:.3f} deg)")
+check("serwo 2. rzedu: wieksza odpowiedz niz passthrough (trailing response)",
+      abs(d_theta_2nd) > abs(d_theta),
+      f"(2nd={d_theta_2nd:.3f} vs PT={d_theta:.3f} deg)")
+
 print("\n" + "=" * 62)
 print(f"  Wynik: {PASS}/{PASS + FAIL} testow zaliczonych")
 print("  STATUS: OK" if FAIL == 0 else f"  STATUS: {FAIL} FAIL")

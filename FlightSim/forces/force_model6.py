@@ -107,6 +107,9 @@ class ForceModel6DOF:
         # wzorem wind_model: trzymany surowo, sprawdzany w miejscu uzycia.
         # None => model zachowuje sie dokladnie jak przed dodaniem sterowania.
         self.control    = control
+        self._n_ctrl_states = 0
+        if control is not None and hasattr(control, 'n_states'):
+            self._n_ctrl_states = int(control.n_states)
         # Dual-spin — opcjonalnie z cfg
         self._dual_spin = None
         if cfg is not None and getattr(cfg, 'dual_spin', None) is not None:
@@ -301,17 +304,20 @@ class ForceModel6DOF:
         ctrl_F = _ZERO3
         ctrl_M = _ZERO3
         ctrl_diag = None
+        _ctrl_xa = None
+        _ctrl_fs = None
         if self.control is not None:
             from control.types import FlightState as _FS
-            fs = _FS(
+            _ctrl_fs = _FS(
                 t=t, alpha=alpha, beta=beta, mach=mach, q_dyn=q_dyn,
                 speed=speed, p=p, q=qr, r=r, m=m,
                 Ixx=Ixx, Iyy=Iyy, Izz=Izz, xcg=xcg,
                 thrust=thrust, on_rail=bool(on_rail), rho=atm.density,
             )
-            # UWAGA: nie nazywac tego 'w' — 'w' to skladowa Z predkosci w ukladzie
-            # ciala, uzywana nizej w rownaniach translacji.
-            _wr = self.control.compute(fs)
+            if self._n_ctrl_states > 0:
+                idx_ctrl = 15 if self._dual_spin is not None else 14
+                _ctrl_xa = x[idx_ctrl:idx_ctrl + self._n_ctrl_states]
+            _wr = self.control.compute(_ctrl_fs, _ctrl_xa)
             ctrl_F, ctrl_M, ctrl_diag = _wr.F, _wr.M, _wr.diag
 
         # ---- Grawitacja w body frame ------------------------------------ #
@@ -474,5 +480,8 @@ class ForceModel6DOF:
             d_rail_dist_dt,
         ])
         if self._dual_spin is not None:
-            return np.append(base, dp_fwd_dt)
+            base = np.append(base, dp_fwd_dt)
+        if self._n_ctrl_states > 0 and self.control is not None and _ctrl_fs is not None:
+            dxa = self.control.actuator_derivatives(_ctrl_fs, _ctrl_xa)
+            base = np.append(base, dxa)
         return base
