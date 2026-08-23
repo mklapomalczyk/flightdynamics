@@ -8,7 +8,13 @@ zapisuje field_test_data/results/per_flight_6dof_per_nose.csv. Ten skrypt
 pozwala zrobic z tego pliku migawke, a potem porownac z nia nowy wynik —
 zeby bylo widac, co dokladnie zmiana w modelu poprawila, a co pogorszyla.
 
-Typowy przebieg:
+Dla konkretnie poprawki LREF nie rob tego recznie — jest gotowy skrypt, ktory
+robi oba przebiegi i porownanie jednym poleceniem (i sam ustawia zmienne
+srodowiskowe, wiec nie zalezy od shella):
+
+    python run_lref_validation_compare.py
+
+Recznie, dla dowolnej innej zmiany w modelu:
     # 1. przed zmiana (albo tuz po pobraniu starych wynikow)
     python telemetry_analysis/analyze_per_flight_6dof.py
     python compare_validation.py --save-baseline przed_LREF
@@ -190,7 +196,10 @@ def cmd_compare(name: str, do_plot: bool):
         print("  c) zmiana byla sterowana zmienna srodowiskowa")
         print("     (FLIGHTSIM_LREF_MODE), ktora nie dotarla do Pythona — w")
         print("     PowerShell `set` to alias Set-Variable i NIE tworzy zmiennej")
-        print("     srodowiskowej. Sprawdz: python check_lref_mode.py")
+        print("     srodowiskowej (`$env:NAZWA=\"...\"` tworzy).")
+        print("     Sprawdz:  python check_lref_mode.py")
+        print("     Najprosciej pominac shell i uruchomic calosc jednym")
+        print("     poleceniem:  python run_lref_validation_compare.py")
         return 2
 
     if meta.get("source_mtime") and src.stat().st_mtime <= meta["source_mtime"] + 1:
