@@ -183,6 +183,8 @@ def run_simulation_6dof(
         for idx in [IDX_V, IDX_W, IDX_P, IDX_QR, IDX_R]:
             y[idx, on_rail_mask] = 0.0
 
-    # SimResult6DOF używa pierwszych 13 wierszy
-    n_state = 15 if _dual_spin_active else 13
-    return SimResult6DOF.from_raw(result.t, y[:n_state], status=sim_status)
+    ctrl_idx = 0
+    if _n_ctrl > 0:
+        ctrl_idx = 15 if _dual_spin_active else 14
+    return SimResult6DOF.from_raw(result.t, y, status=sim_status,
+                                  ctrl_idx=ctrl_idx)

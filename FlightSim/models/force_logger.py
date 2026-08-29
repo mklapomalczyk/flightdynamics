@@ -87,6 +87,7 @@ class ForceLogger:
         # Zadane wychylenia powierzchni sterowych [deg]
         "d_pitch_cmd", "d_yaw_cmd", "d_roll_cmd",
         "d_pitch_act", "d_yaw_act", "d_roll_act",
+        "d_pitch_rate", "d_yaw_rate", "d_roll_rate",
         "M_thrust_pitch", "M_thrust_yaw",
         "MX", "MY", "MZ",
     ]

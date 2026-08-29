@@ -46,6 +46,14 @@ IDX_RAIL_DIST = 13
 _ZERO3 = np.zeros(3)
 _ZERO3.flags.writeable = False
 
+_RATE_KEYS = ("d_pitch_rate", "d_yaw_rate", "d_roll_rate")
+
+def _ctrl_xa_to_rates(xa, n_states):
+    if xa is None or n_states < 2:
+        return {}
+    n_ch = n_states // 2
+    return {_RATE_KEYS[i]: float(xa[2 * i + 1]) for i in range(min(n_ch, 3))}
+
 
 @dataclass
 class PropulsionConfig6DOF:
@@ -426,6 +434,7 @@ class ForceModel6DOF:
                 "M_thrust_yaw":   M_thrust_yaw,
                 "MX": MX, "MY": MY, "MZ": MZ,
                 **(ctrl_diag or {}),
+                **(_ctrl_xa_to_rates(_ctrl_xa, self._n_ctrl_states)),
             })
 
         # ---- Dual-spin — równania dp_aft_dt i dp_fwd_dt ---------------- #
