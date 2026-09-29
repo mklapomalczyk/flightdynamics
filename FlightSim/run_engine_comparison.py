@@ -73,7 +73,7 @@ def run_engine(engine_name, elevations, set_label):
 
     print(f"\n{'='*60}")
     print(f"Engine: {engine_name} | elevations: {elevations} ({set_label})")
-    print(f"Full mass: {cfg.mass_model['full']['mass']:.3f} kg")
+    print(f"Full mass: {cfg.mass_model.full.mass:.3f} kg")
     print(f"{'='*60}")
 
     for elev in elevations:
