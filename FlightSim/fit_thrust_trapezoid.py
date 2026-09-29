@@ -68,10 +68,15 @@ def fit_trapezoid(t, F):
     """
     F_max = np.max(F)
 
-    # ignition: first time F > 5% of peak
-    mask_ign = F > 0.05 * F_max
-    t_ign = t[mask_ign][0] if np.any(mask_ign) else t[0]
-    F_ign = F[mask_ign][0] if np.any(mask_ign) else 50.0
+    # Time origin: first time F >= 50 N
+    mask_50 = F >= 50.0
+    if np.any(mask_50):
+        t0 = t[mask_50][0]
+    else:
+        t0 = t[0]
+
+    # Shift time so t0 becomes 0.0
+    t = t - t0
 
     # ramp point: where F reaches 20% of peak
     mask_ramp = F > 0.20 * F_max
@@ -108,7 +113,7 @@ def fit_trapezoid(t, F):
         [round(t_tail, 3), round(F_tail, 1)],
         [round(t_end, 3), 0.0],
     ]
-    return profile
+    return profile, t0
 
 
 def generate_yaml(engine_name, prop_mass_kg, thrust_profile, base_yaml_path):
@@ -170,9 +175,9 @@ def main():
         print(f"Engine: {engine_name}, propellant mass: {prop_mass*1000:.0f} g")
 
         t, F = read_engine_csv(csv_path)
-        profile = fit_trapezoid(t, F)
+        profile, t0 = fit_trapezoid(t, F)
 
-        print(f"Trapezoid profile:")
+        print(f"Trapezoid profile (t0 shifted by {t0:.4f} s):")
         for pt in profile:
             print(f"  t={pt[0]:.3f} s  F={pt[1]:.1f} N")
 
@@ -180,9 +185,9 @@ def main():
         yaml_path = generate_yaml(engine_name, prop_mass, profile, BASE_YAML)
         print(f"YAML: {yaml_path.name}")
 
-        # Plot
+        # Plot with shifted time
         ax = axes[i] if i < len(axes) else axes[-1]
-        ax.plot(t, F, "tab:blue", lw=0.5, alpha=0.7, label="CSV data")
+        ax.plot(t - t0, F, "tab:blue", lw=0.5, alpha=0.7, label="CSV data")
         tp = [p[0] for p in profile]
         fp = [p[1] for p in profile]
         ax.plot(tp, fp, "r-o", lw=2, ms=6, label="trapezoid fit")
