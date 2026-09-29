@@ -78,14 +78,44 @@ def fit_trapezoid(t, F):
     # Shift time so t0 becomes 0.0
     t = t - t0
 
-    # ramp point: where F reaches 20% of peak
+    # ramp point: where F reaches 20% of peak (steep ramp)
     mask_ramp = F > 0.20 * F_max
     idx_ramp = np.argmax(mask_ramp)
     t_ramp = t[idx_ramp]
     F_ramp = F[idx_ramp]
 
-    # peak: max thrust
+    # knee point: top of steep ramp, where slope drops
+    # Find where dF/dt is maximum, then the knee is where it drops to ~30%
+    dt_arr = np.diff(t)
+    dF_dt = np.diff(F) / np.where(dt_arr > 0, dt_arr, 1e-6)
+    # smooth to avoid noise spikes
+    win = min(200, len(dF_dt) // 10)
+    if win > 1:
+        kernel = np.ones(win) / win
+        dF_smooth = np.convolve(dF_dt, kernel, mode="same")
+    else:
+        dF_smooth = dF_dt
+    # search only in the rising part (before peak)
     idx_peak = np.argmax(F)
+    rising = dF_smooth[:idx_peak]
+    if len(rising) > 0:
+        max_slope = np.max(rising)
+        # knee: first point after max slope where slope drops below 30% of max
+        idx_max_slope = np.argmax(rising)
+        after_max = rising[idx_max_slope:]
+        mask_knee = after_max < 0.30 * max_slope
+        if np.any(mask_knee):
+            idx_knee = idx_max_slope + np.argmax(mask_knee)
+            t_knee = t[idx_knee]
+            F_knee = F[idx_knee]
+        else:
+            t_knee = t[idx_ramp] + (t[idx_peak] - t[idx_ramp]) * 0.3
+            F_knee = np.interp(t_knee, t, F)
+    else:
+        t_knee = t[idx_ramp] + (t[idx_peak] - t[idx_ramp]) * 0.3
+        F_knee = np.interp(t_knee, t, F)
+
+    # peak: max thrust
     t_peak = t[idx_peak]
     F_peak = F_max
 
@@ -105,10 +135,11 @@ def fit_trapezoid(t, F):
     mask_burn = F > 10.0
     t_end = t[mask_burn][-1] if np.any(mask_burn) else t[-1]
 
-    # Build 5-point profile, starting at [0.0, 50.0]
+    # Build 6-point profile
     profile = [
         [0.0, 50.0],
         [round(t_ramp, 3), round(F_ramp, 1)],
+        [round(t_knee, 3), round(F_knee, 1)],
         [round(t_peak, 3), round(F_peak, 1)],
         [round(t_tail, 3), round(F_tail, 1)],
         [round(t_end, 3), 0.0],
