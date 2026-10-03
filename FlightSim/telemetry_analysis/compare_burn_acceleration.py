@@ -28,6 +28,7 @@ Uzycie:
 import sys
 import math
 import argparse
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -116,7 +117,9 @@ def main():
     root = Path(base).parent
     out_dir = Path(base) / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
-    log_dir = out_dir / "_tmp_logs"
+    # poza OneDrive — synchronizacja blokuje katalog i rmdir rzuca PermissionError
+    tmp = tempfile.TemporaryDirectory(prefix="burn_accel_", ignore_cleanup_errors=True)
+    log_dir = Path(tmp.name)
 
     case_by_nose = {"ostra": args.case_ostra, "tepa": args.case_tepa}
     flights = read_flights(base)
@@ -185,8 +188,7 @@ def main():
         fig.savefig(png, dpi=130, bbox_inches="tight")
         plt.close(fig)
 
-    if log_dir.exists() and not any(log_dir.iterdir()):
-        log_dir.rmdir()
+    tmp.cleanup()
     if not rows:
         print("Brak wynikow.")
         return
