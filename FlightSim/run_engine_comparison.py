@@ -40,7 +40,8 @@ from models.force_logger import ForceLogger
 # USER PARAMETERS
 # ============================================================
 
-ENGINES = ["WB700", "WB800", "WB900", "WB1000"]
+# Silniki wybrane ostatnio w fit_thrust_trapezoid.py
+SELECTED_FILE = ROOT / "results" / "selected_engines.txt"
 
 ELEVATIONS_LOW  = [30, 35, 40, 45]
 ELEVATIONS_HIGH = [50, 55, 60, 65]
@@ -168,7 +169,12 @@ def run_engine(engine_name, elevations, set_label):
 
 
 def main():
-    for engine in ENGINES:
+    if not SELECTED_FILE.exists():
+        print(f"Brak {SELECTED_FILE} — najpierw uruchom fit_thrust_trapezoid.py")
+        return
+    engines = [e.strip() for e in SELECTED_FILE.read_text(encoding="utf-8").splitlines() if e.strip()]
+    print(f"Silniki: {engines}")
+    for engine in engines:
         run_engine(engine, ELEVATIONS_LOW, "low")
         run_engine(engine, ELEVATIONS_HIGH, "high")
 

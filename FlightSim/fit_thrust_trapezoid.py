@@ -1,8 +1,12 @@
 """
 fit_thrust_trapezoid.py
 =======================
-Read engine CSVs from engine_plots/, fit a 5-point trapezoid thrust profile,
-generate per-engine YAML configs, and save a comparison plot.
+Pick engine CSVs in a file dialog (any number), fit a 6-point trapezoid
+thrust profile, generate per-engine YAML configs, save a comparison plot and
+the list of picked engines for run_engine_comparison.py.
+
+Filename: <ENGINE>_<anything>_<mass>g.csv
+  ENGINE = everything before the first "_", mass = number at the end [g].
 
 Usage:
     python fit_thrust_trapezoid.py
@@ -28,6 +32,21 @@ CFG_DIR = ROOT / "configurations"
 BASE_YAML = CFG_DIR / "rocket_70mm_WB500.yaml"
 OUT_DIR = ROOT / "results"
 OUT_DIR.mkdir(exist_ok=True)
+SELECTED_FILE = OUT_DIR / "selected_engines.txt"
+
+
+def pick_files():
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    files = filedialog.askopenfilenames(
+        title="Wybierz pliki CSV silnikow (Ctrl/Shift = wiele)",
+        initialdir=str(ENGINE_DIR),
+        filetypes=[("CSV", "*.csv"), ("Wszystkie pliki", "*.*")])
+    root.destroy()
+    return [Path(f) for f in files]
 
 
 def read_engine_csv(path):
@@ -43,13 +62,13 @@ def read_engine_csv(path):
 
 
 def parse_filename(name):
-    """Extract engine name and propellant mass from filename.
-    E.g. 'WB700_ParametryNapedowe_masa2328g.csv' -> ('WB700', 2.328)
-    """
-    m = re.match(r"(WB\d+)_.*masa(\d+)g", name)
-    if not m:
-        raise ValueError(f"Cannot parse engine filename: {name}")
-    return m.group(1), int(m.group(2)) / 1000.0  # kg
+    """'WB700_ParametryNapedowe_masa2328g.csv' -> ('WB700', 2.328 kg)."""
+    stem = Path(name).stem
+    engine = stem.split("_", 1)[0]
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*g?$", stem, flags=re.IGNORECASE)
+    if not engine or not m:
+        raise ValueError(f"Cannot parse engine name/mass from filename: {name}")
+    return engine, float(m.group(1).replace(",", ".")) / 1000.0
 
 
 def fit_trapezoid(t, F):
@@ -192,16 +211,29 @@ def generate_yaml(engine_name, prop_mass_kg, thrust_profile, base_yaml_path):
 
 
 def main():
-    csv_files = sorted(ENGINE_DIR.glob("*.csv"))
-    if not csv_files:
-        print("No CSV files found in engine_plots/")
+    picked = pick_files()
+    if not picked:
+        print("No files selected.")
         return
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    parsed = []
+    for p in sorted(picked):
+        try:
+            parsed.append((p, *parse_filename(p.name)))
+        except ValueError as e:
+            print(f"[SKIP] {e}")
+    if not parsed:
+        return
+
+    n = len(parsed)
+    ncol = min(n, 3)
+    nrow = int(np.ceil(n / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(5 * ncol, 4.5 * nrow), squeeze=False)
     axes = axes.ravel()
 
-    for i, csv_path in enumerate(csv_files):
-        engine_name, prop_mass = parse_filename(csv_path.name)
+    engines = []
+    for i, (csv_path, engine_name, prop_mass) in enumerate(parsed):
+        engines.append(engine_name)
         print(f"\n{'='*60}")
         print(f"Engine: {engine_name}, propellant mass: {prop_mass*1000:.0f} g")
 
@@ -217,7 +249,7 @@ def main():
         print(f"YAML: {yaml_path.name}")
 
         # Plot with shifted time
-        ax = axes[i] if i < len(axes) else axes[-1]
+        ax = axes[i]
         ax.plot(t - t0, F, "tab:blue", lw=0.5, alpha=0.7, label="CSV data")
         tp = [p[0] for p in profile]
         fp = [p[1] for p in profile]
@@ -238,6 +270,9 @@ def main():
         out_png.unlink()
     fig.savefig(out_png, dpi=130, bbox_inches="tight")
     print(f"\nPlot saved: {out_png}")
+
+    SELECTED_FILE.write_text("\n".join(engines) + "\n", encoding="utf-8")
+    print(f"Engines for run_engine_comparison.py: {engines}  ({SELECTED_FILE.name})")
 
     if "--show" in sys.argv:
         plt.show()
