@@ -1,8 +1,8 @@
 """
 fit_thrust_trapezoid.py
 =======================
-Pick engine CSVs in a file dialog (any number), fit a 6-point trapezoid
-thrust profile, generate per-engine YAML configs, save a comparison plot and
+Pick engine CSVs in a file dialog (any number), simplify the thrust curve
+to a polyline (Ramer-Douglas-Peucker, point count adapts to the curve shape), generate per-engine YAML configs, save a comparison plot and
 the list of picked engines for run_engine_comparison.py.
 
 Filename: <ENGINE>_<anything>_<mass>g.csv
@@ -33,6 +33,9 @@ BASE_YAML = CFG_DIR / "rocket_70mm_WB500.yaml"
 OUT_DIR = ROOT / "results"
 OUT_DIR.mkdir(exist_ok=True)
 SELECTED_FILE = OUT_DIR / "selected_engines.txt"
+
+TOL_FRAC = 0.02      # max odchylka lamanej od CSV, jako ulamek ciagu maks.
+IMPULSE_TOL = 0.01   # max blad impulsu calkowitego (1%)
 
 
 def pick_files():
@@ -71,99 +74,53 @@ def parse_filename(name):
     return engine, float(m.group(1).replace(",", ".")) / 1000.0
 
 
-def fit_trapezoid(t, F):
-    """Fit a 5-point trapezoid to the thrust curve.
+def rdp_indices(t, F, tol):
+    """Ramer-Douglas-Peucker: indeksy punktow lamanej, ktora odbiega od
+    krzywej o co najwyzej tol [N] (odleglosc pionowa — osie maja rozne
+    jednostki, wiec liczy sie blad ciagu, nie odleglosc geometryczna)."""
+    keep = {0, len(t) - 1}
+    stack = [(0, len(t) - 1)]
+    while stack:
+        i0, i1 = stack.pop()
+        if i1 - i0 < 2:
+            continue
+        seg = slice(i0 + 1, i1)
+        line = F[i0] + (F[i1] - F[i0]) * (t[seg] - t[i0]) / (t[i1] - t[i0])
+        dev = np.abs(F[seg] - line)
+        k = int(np.argmax(dev))
+        if dev[k] > tol:
+            im = i0 + 1 + k
+            keep.add(im)
+            stack += [(i0, im), (im, i1)]
+    return np.array(sorted(keep))
 
-    Points:
-      0: [0.0, 50.0]          - start (50N to hold on rail)
-      1: [t_ramp, F_ramp]     - end of ignition ramp (~10% of peak)
-      2: [t_peak, F_peak]     - peak thrust
-      3: [t_tail, F_tail]     - start of tail-off
-      4: [t_end, 0.0]         - burnout
 
-    Strategy: the curve is progressive (ramps up continuously), so
-    the trapezoid captures ignition transient, main ramp, peak region,
-    and tail-off.
-    """
-    F_max = np.max(F)
+def fit_profile(t, F):
+    """Uproszczony profil ciagu (lamana RDP) — liczba punktow dobiera sie
+    sama: kilka dla trapezu, wiecej dla profilu piloksztaltnego.
 
-    # Time origin: first time F >= 50 N
-    mask_50 = F >= 50.0
-    if np.any(mask_50):
-        t0 = t[mask_50][0]
-    else:
-        t0 = t[0]
+    Start: t=0 tam, gdzie F po raz pierwszy >= 50 N (punkt [0, 50]).
+    Koniec: ostatnia chwila F > 10 N (punkt [t_end, 0]).
+    Tolerancja startowa TOL_FRAC*F_max; zaciesniana, az impuls calkowity
+    rozni sie od CSV o mniej niz IMPULSE_TOL."""
+    i_start = int(np.argmax(F >= 50.0)) if np.any(F >= 50.0) else 0
+    i_end = int(np.where(F > 10.0)[0][-1]) if np.any(F > 10.0) else len(F) - 1
+    t0 = t[i_start]
+    tt, FF = t[i_start:i_end + 1] - t0, F[i_start:i_end + 1].copy()
+    FF[0], FF[-1] = 50.0, 0.0
+    I_csv = np.trapezoid(F[i_start:i_end + 1], tt)
 
-    # Shift time so t0 becomes 0.0
-    t = t - t0
+    tol = TOL_FRAC * F.max()
+    while True:
+        idx = rdp_indices(tt, FF, tol)
+        I_fit = np.trapezoid(FF[idx], tt[idx])
+        err = (I_fit - I_csv) / I_csv
+        if abs(err) <= IMPULSE_TOL or tol < 0.001 * F.max():
+            break
+        tol /= 2.0
 
-    # ramp point: where F reaches 20% of peak (steep ramp)
-    mask_ramp = F > 0.20 * F_max
-    idx_ramp = np.argmax(mask_ramp)
-    t_ramp = t[idx_ramp]
-    F_ramp = F[idx_ramp]
-
-    # knee point: top of steep ramp, where slope drops
-    # Find where dF/dt is maximum, then the knee is where it drops to ~30%
-    dt_arr = np.diff(t)
-    dF_dt = np.diff(F) / np.where(dt_arr > 0, dt_arr, 1e-6)
-    # smooth to avoid noise spikes
-    win = min(200, len(dF_dt) // 10)
-    if win > 1:
-        kernel = np.ones(win) / win
-        dF_smooth = np.convolve(dF_dt, kernel, mode="same")
-    else:
-        dF_smooth = dF_dt
-    # search only in the rising part (before peak)
-    idx_peak = np.argmax(F)
-    rising = dF_smooth[:idx_peak]
-    if len(rising) > 0:
-        max_slope = np.max(rising)
-        # knee: first point after max slope where slope drops below 30% of max
-        idx_max_slope = np.argmax(rising)
-        after_max = rising[idx_max_slope:]
-        mask_knee = after_max < 0.30 * max_slope
-        if np.any(mask_knee):
-            idx_knee = idx_max_slope + np.argmax(mask_knee)
-            t_knee = t[idx_knee]
-            F_knee = F[idx_knee]
-        else:
-            t_knee = t[idx_ramp] + (t[idx_peak] - t[idx_ramp]) * 0.3
-            F_knee = np.interp(t_knee, t, F)
-    else:
-        t_knee = t[idx_ramp] + (t[idx_peak] - t[idx_ramp]) * 0.3
-        F_knee = np.interp(t_knee, t, F)
-
-    # peak: max thrust
-    t_peak = t[idx_peak]
-    F_peak = F_max
-
-    # tail-off start: after peak, where F drops below 50% of peak
-    after_peak = F[idx_peak:]
-    t_after = t[idx_peak:]
-    mask_tail = after_peak < 0.50 * F_max
-    if np.any(mask_tail):
-        idx_tail = np.argmax(mask_tail)
-        t_tail = t_after[idx_tail]
-        F_tail = after_peak[idx_tail]
-    else:
-        t_tail = t_peak + 0.1
-        F_tail = F_peak * 0.3
-
-    # burnout: last time F > 10 N
-    mask_burn = F > 10.0
-    t_end = t[mask_burn][-1] if np.any(mask_burn) else t[-1]
-
-    # Build 6-point profile
-    profile = [
-        [0.0, 50.0],
-        [round(t_ramp, 3), round(F_ramp, 1)],
-        [round(t_knee, 3), round(F_knee, 1)],
-        [round(t_peak, 3), round(F_peak, 1)],
-        [round(t_tail, 3), round(F_tail, 1)],
-        [round(t_end, 3), 0.0],
-    ]
-    return profile, t0
+    profile = [[round(float(tt[i]), 4), round(float(FF[i]), 1)] for i in idx]
+    return profile, t0, err
 
 
 def generate_yaml(engine_name, prop_mass_kg, thrust_profile, base_yaml_path):
@@ -238,9 +195,10 @@ def main():
         print(f"Engine: {engine_name}, propellant mass: {prop_mass*1000:.0f} g")
 
         t, F = read_engine_csv(csv_path)
-        profile, t0 = fit_trapezoid(t, F)
+        profile, t0, i_err = fit_profile(t, F)
 
-        print(f"Trapezoid profile (t0 shifted by {t0:.4f} s):")
+        print(f"Profile: {len(profile)} points, impulse error {i_err*100:+.2f}% "
+              f"(t0 shifted by {t0:.4f} s):")
         for pt in profile:
             print(f"  t={pt[0]:.3f} s  F={pt[1]:.1f} N")
 
@@ -253,7 +211,7 @@ def main():
         ax.plot(t - t0, F, "tab:blue", lw=0.5, alpha=0.7, label="CSV data")
         tp = [p[0] for p in profile]
         fp = [p[1] for p in profile]
-        ax.plot(tp, fp, "r-o", lw=2, ms=6, label="trapezoid fit")
+        ax.plot(tp, fp, "r-o", lw=1.5, ms=4, label=f"fit: {len(profile)} pkt, impuls {i_err*100:+.1f}%")
         ax.set_xlabel("time [s]")
         ax.set_ylabel("thrust [N]")
         ax.set_title(f"{engine_name} ({prop_mass*1000:.0f} g)")
@@ -263,7 +221,7 @@ def main():
     for j in range(i + 1, len(axes)):
         axes[j].set_visible(False)
 
-    fig.suptitle("Engine thrust profiles — CSV vs trapezoid fit", fontweight="bold")
+    fig.suptitle("Engine thrust profiles — CSV vs simplified profile", fontweight="bold")
     fig.tight_layout()
     out_png = OUT_DIR / "thrust_trapezoid_fits.png"
     if out_png.exists():
