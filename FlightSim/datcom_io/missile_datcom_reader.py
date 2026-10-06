@@ -66,8 +66,17 @@ class MissileDatcomResult:
 
 
 def parse_missile_datcom_output(output_path, dedupe_by_mach: bool = True) -> MissileDatcomResult:
-    lines = Path(output_path).read_text(encoding="ascii", errors="replace").splitlines()
+    text = Path(output_path).read_text(encoding="ascii", errors="replace")
+    lines = text.splitlines()
     result = MissileDatcomResult()
+
+    # Tabela wynikow drukuje REF LENGTH/REF AREA zaokraglone (np. LREF=0.036
+    # jako "0.04", SREF=0.001018 jako "0.001"). Plik .out zawiera tez echo
+    # decku wejsciowego z pelna precyzja ("LREF=0.0360,") — uzywamy go.
+    m_l = re.search(r"\bLREF\s*=\s*([\d.]+)", text)
+    m_s = re.search(r"\bSREF\s*=\s*([\d.Ee+\-]+?)\s*,", text)
+    lref_echo = float(m_l.group(1)) if m_l else None
+    sref_echo = float(m_s.group(1)) if m_s else None
 
     i = 0
     while i < len(lines):
@@ -89,6 +98,10 @@ def parse_missile_datcom_output(output_path, dedupe_by_mach: bool = True) -> Mis
             if m: lref = float(m.group(1))
             if all(v is not None for v in [mach, xcg, sref, lref]):
                 break
+        if lref_echo is not None:
+            lref = lref_echo
+        if sref_echo is not None:
+            sref = sref_echo
 
         if None in [mach, xcg, sref, lref]:
             i += 1; continue
