@@ -18,6 +18,10 @@ w pitch (jedyny kanal, ktory mial hak w modelu sil przed ta praca):
 
 Uzywa ZMIERZONYCH pochodnych z DATCOM, jesli sa; inaczej syntetycznych.
 
+Platowiec NIE wiruje (model demo bez momentu od zaklinowania pletw) — inaczej
+sprzezenie skrosne mierzyloby obrot korpusu, a nie lancuch sterowania.
+Efekt wirowania jest pokazany osobno na koncu (blok "WIRUJACY PLATOWIEC").
+
 Uruchomienie:  python3 tests/test_control_channels.py
 """
 
@@ -234,6 +238,40 @@ for channel, (lbl, rate_at, m_axis, u_idx) in CHANNELS.items():
           f"(2nd={np.degrees(peak_rate_2[1]):.2f} vs PT={np.degrees(pt_rate[1]):.2f} deg/s)")
 
     results_2nd[lbl] = peak_rate_2
+
+# ===========================================================================
+# INFORMACYJNIE: sprzezenie pitch/yaw na WIRUJACYM platowcu
+# ===========================================================================
+# Testy wyzej uzywaja modelu demo BEZ momentu od zaklinowania pletw (patrz
+# control/demo_model.py::demo_aero, with_fin_cant). Realna rakieta 70mm
+# (pletwy 1.2 deg) rozkreca sie do ~1200 deg/s, a canardy obracaja sie z
+# korpusem — komenda pitch rozklada sie wtedy na pitch i yaw. To NIE jest
+# blad modulu sterowania, tylko fizyka; ten blok dokumentuje ten efekt.
+print("\n" + "=" * 72)
+print("WIRUJACY PLATOWIEC (pelna realna aero z zaklinowaniem pletw)")
+print("=" * 72)
+from control.demo_model import real_aero_or_none
+_real = real_aero_or_none()
+if _real is None or getattr(_real, "CLL_table", None) is None:
+    SKIP += 1
+    print("  [SKIP] brak realnej aero DATCOM z CLL_table — pomijam")
+else:
+    r_spin0 = fly_demo(None, t_max=T_MAX, with_fin_cant=True)
+    cs = ControlSystem(StepCommander(T_STEP, AMPS[0], "d_pitch", duration_s=T_DUR),
+                       PassthroughActuator(), [eff])
+    r_spin = fly_demo(cs, t_max=T_MAX, with_fin_cant=True)
+    p_max = float(np.max(np.abs(r_spin0.p)))
+    dq = float(np.max(np.abs(r_spin.qr - np.interp(r_spin.t, r_spin0.t, r_spin0.qr))))
+    dr = float(np.max(np.abs(r_spin.r - np.interp(r_spin.t, r_spin0.t, r_spin0.r))))
+    print(f"    p_max bez sterowania = {np.degrees(p_max):.0f} deg/s, "
+          f"pitch {AMPS[0]:.0f} deg: przyrost q/r = {np.degrees(dq):.2f} / "
+          f"{np.degrees(dr):.2f} deg/s")
+    check("wirujacy platowiec: rakieta sie rozkreca (> 360 deg/s)",
+          p_max > np.radians(360.0), f"(p_max={np.degrees(p_max):.0f} deg/s)")
+    check("wirujacy platowiec: komenda pitch przenosi sie na yaw (r > 40% q)",
+          dr > 0.40 * dq, f"(r/q={dr / max(dq, 1e-12) * 100:.0f}%)")
+    check("wirujacy platowiec: przebieg zakonczony poprawnie",
+          r_spin.status == "ok", f"(status={r_spin.status})")
 
 print("\n" + "=" * 72)
 total = PASS + FAIL

@@ -12,6 +12,7 @@ tabele aero. Sluzy do pokazania i sprawdzenia LANCUCHA sterowania.
 
 from __future__ import annotations
 
+import copy
 from typing import Optional
 
 import numpy as np
@@ -69,9 +70,19 @@ def real_aero_or_none():
     return out
 
 
-def demo_aero(with_roll_damping: bool = True) -> TableAero:
+def demo_aero(with_roll_damping: bool = True,
+              with_fin_cant: bool = False) -> TableAero:
     """
     Uproszczona, ale statycznie stabilna aerodynamika.
+
+    with_fin_cant: realna rakieta 70mm ma pletwy zaklinowane o 1.2 deg
+    (CLL_table z DATCOM) i w locie demo rozkreca sie do ~1200 deg/s. Canardy
+    sa przymocowane do korpusu, wiec ich moment obraca sie razem z nim:
+    komenda "pitch" rozklada sie wtedy na pitch i yaw (sprzezenie 100-160%).
+    To poprawna fizyka, ale model demo sluzy do sprawdzania LANCUCHA
+    sterowania na nieobracajacym sie platowcu, wiec domyslnie zerujemy
+    moment od zaklinowania. True = pelna realna aero (np. do pokazania
+    tego sprzezenia, patrz tests/test_control_channels.py).
 
     with_roll_damping: Clp_table jest tu ISTOTNE dla kanalu roll. Bez niego
     moment tocznny nie ma sie o co oprzec i po impulsie predkosc obrotowa
@@ -81,8 +92,14 @@ def demo_aero(with_roll_damping: bool = True) -> TableAero:
     """
     real = real_aero_or_none()
     if real is not None:
+        # Kopia — obiekt z cache jest wspoldzielony miedzy wywolaniami,
+        # a ponizsze zmiany zaleza od argumentow.
+        real = copy.deepcopy(real)
         if with_roll_damping and getattr(real, "Clp_table", None) is None:
             real.Clp_table = -2.0 * np.ones_like(real.CN_table)
+        if not with_fin_cant:
+            real.CLL_table = None
+            real.Cl0_manufacturing = 0.0
         return real
 
     # Tablica zastepcza — Cm dobrane tak, by Cm_alpha odpowiadalo realnej
@@ -101,14 +118,15 @@ def demo_aero(with_roll_damping: bool = True) -> TableAero:
     )
 
 
-def build_demo_model(control=None, with_roll_damping: bool = True) -> ForceModel6DOF:
+def build_demo_model(control=None, with_roll_damping: bool = True,
+                     with_fin_cant: bool = False) -> ForceModel6DOF:
     mass = MassModel6DOF(m_full=4.2, m_empty=4.19, t_burn=1.0,
                          xcg_full=0.71, xcg_empty=0.71,
                          Iyy_full=0.646, Iyy_empty=0.646,
                          ixx_model=ConstantIxx(0.0032))
     return ForceModel6DOF(
         atmosphere=create_atmosphere("ISA"), mass_model=mass,
-        aero_model=demo_aero(with_roll_damping),
+        aero_model=demo_aero(with_roll_damping, with_fin_cant),
         gravity=create_gravity("constant"),
         geometry=RocketGeometry6DOF.from_diameter(0.070, xcp=0.95),
         propulsion=PropulsionConfig6DOF(thrust=0.0),
@@ -117,10 +135,11 @@ def build_demo_model(control=None, with_roll_damping: bool = True) -> ForceModel
 
 def fly_demo(control=None, t_max: float = 15.0, dt_output: float = 0.01,
              elevation_deg: float = 80.0, speed_0: float = 250.0,
-             with_roll_damping: bool = True):
+             with_roll_damping: bool = True, with_fin_cant: bool = False):
     """Lot demonstracyjny. z_ground bardzo nisko — nie przerywamy o grunt."""
     st = State6DOF.initial(elevation_deg=elevation_deg, azimuth_deg=0.0,
                            speed_0=speed_0)
-    return run_simulation_6dof(build_demo_model(control, with_roll_damping),
+    return run_simulation_6dof(build_demo_model(control, with_roll_damping,
+                                                with_fin_cant),
                                st, t_max=t_max, dt_output=dt_output,
                                z_ground=-1e9)

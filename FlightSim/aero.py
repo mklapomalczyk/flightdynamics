@@ -226,6 +226,10 @@ def _parse_and_cache(out_path, pkl_path, Cmq, out_body_path=None,
         CLL_table   = CLL_table,
         xcg_ref     = float(table["xcg"]),   # xcg uzyte w DATCOM do obliczenia Cm_table
         CA_base_table = table.get("CA_base"),  # opor denny -> korekta powered/coast
+        # Dlugosc odniesienia momentow z outputu DATCOM. Bez niej
+        # _check_moment_reference odrzucal KAZDY swiezo zapisany cache przy
+        # nastepnym wczytaniu (brak lref_ref == "cache sprzed poprawki LREF").
+        lref_ref    = float(result.cases[0].lref) if result.cases else None,
     )
     with open(pkl_path, "wb") as f:
         pickle.dump(aero, f)
