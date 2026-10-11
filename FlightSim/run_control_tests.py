@@ -27,6 +27,7 @@ CONTROL_TESTS = [
     ("test_control_step.py",        "lancuch command->actuator->moment->6DOF"),
     ("test_control_channels.py",    "kanaly pitch/yaw/roll x 2/5/8 deg, 15s"),
     ("test_control_derivatives.py", "pochodne sterowania ze sweepa DATCOM"),
+    ("test_reaction_jets.py",       "reaction jets: komenda->zaplon->impuls->6DOF"),
     ("test_gam_baseline_compare.py", "A/B usuniecia GAM"),
 ]
 REGRESSION_TESTS = [

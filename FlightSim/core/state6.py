@@ -273,6 +273,8 @@ class SimResult6DOF:
     d_yaw_rate:   np.ndarray = field(default_factory=lambda: np.array([]))
     d_roll_rate:  np.ndarray = field(default_factory=lambda: np.array([]))
     status: str        = field(default="ok")  # "ok" | "tumbling" | "blowup" | "timeout"
+    # Log komend reaction jets (control/jets.py::JetEvent) — pusty bez jetow
+    jet_events: list   = field(default_factory=list)
 
     # Wielkości pochodne
     speed: np.ndarray = field(init=False)

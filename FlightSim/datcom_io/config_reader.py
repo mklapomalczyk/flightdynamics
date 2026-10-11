@@ -101,6 +101,37 @@ class ActuatorConfig:
 
 
 @dataclass
+class JetRowConfig:
+    """Jeden rzad silnikow reaction jets."""
+    x:         float          # polozenie osiowe [m od nosa]
+    n_engines: int            # silniki rowno po obwodzie
+    phase_deg: float = 0.0    # obrot rzedu: kat pierwszego silnika od +Z w strone +Y [deg]
+
+
+@dataclass
+class JetEngineConfig:
+    """Silnik reaction jet — ten sam dla wszystkich rzedow."""
+    thrust:              float          # ciag nominalny [N]
+    burn_time:           float          # czas pracy [s]
+    ignition_delay:      float = 0.0    # opoznienie komenda -> zaplon [s]
+    tilt_axial_deg:      float = 0.0    # >0: skladowa sily w strone nosa
+    tilt_tangential_deg: float = 0.0    # >0: skladowa obwodowa dajaca +roll
+    profile:             object = "rectangular"   # albo [[t/t_burn, F/F_nom], ...]
+
+
+@dataclass
+class ReactionJetsConfig:
+    """Sterowanie silnikami impulsowymi (control_type: reaction_jets)."""
+    rows:            List[JetRowConfig]
+    engine:          JetEngineConfig
+    radius:          Optional[float] = None    # [m]; None = promien korpusu
+    control_rate_hz: Optional[float] = 100.0   # ticki sterownika; None = tylko harmonogram
+
+
+CONTROL_TYPES = ("none", "canards", "reaction_jets")
+
+
+@dataclass
 class DualSpinSection:
     """Parametry jednej sekcji rakiety dual-spin."""
     mass: float         # [kg]
@@ -169,6 +200,9 @@ class RocketConfig:
     mass_model:       Optional["MassModelConfig"]  = None
     propulsion:       Optional["PropulsionConfig"] = None
     dual_spin:        Optional["DualSpinConfig"]   = None
+    # Typ sterowania z YAML (control_type) — patrz CONTROL_TYPES
+    control_type:     str                          = "none"
+    reaction_jets:    Optional["ReactionJetsConfig"] = None
 
 
 # ============================================================================
@@ -268,6 +302,25 @@ def load_config(yaml_path: Path) -> RocketConfig:
             pos_limit_deg    = float(act_data.get("pos_limit_deg", 15.0)),
         )
 
+    # ---- Reaction jets (opcjonalne) ------------------------------------ #
+    reaction_jets = _parse_reaction_jets(data.get("reaction_jets", None))
+
+    # ---- Typ sterowania ------------------------------------------------ #
+    # Jawny klucz control_type; bez niego zgadujemy z obecnych sekcji, zeby
+    # starsze pliki (canardy bez klucza) dzialaly bez zmian.
+    control_type = data.get("control_type", None)
+    if control_type is None:
+        control_type = ("canards" if control else
+                        "reaction_jets" if reaction_jets is not None else "none")
+    control_type = str(control_type).strip().lower()
+    if control_type not in CONTROL_TYPES:
+        raise ValueError(f"{yaml_path.name}: nieznany control_type {control_type!r} "
+                         f"(dozwolone: {', '.join(CONTROL_TYPES)})")
+    if control_type == "canards" and not control:
+        raise ValueError(f"{yaml_path.name}: control_type: canards wymaga sekcji control_surfaces")
+    if control_type == "reaction_jets" and reaction_jets is None:
+        raise ValueError(f"{yaml_path.name}: control_type: reaction_jets wymaga sekcji reaction_jets")
+
     # ---- Mass --------------------------------------------------------- #
     mass = Mass(xcg_ref=float(data["mass"]["xcg_ref"]))
 
@@ -329,4 +382,46 @@ def load_config(yaml_path: Path) -> RocketConfig:
         mass_model        = mass_model,
         dual_spin         = dual_spin,
         propulsion        = propulsion,
+        control_type      = control_type,
+        reaction_jets     = reaction_jets,
+    )
+
+
+def _parse_reaction_jets(rj) -> Optional[ReactionJetsConfig]:
+    """Sekcja reaction_jets z YAML -> ReactionJetsConfig (z walidacja)."""
+    if rj is None:
+        return None
+    rows_data = rj.get("rows", None)
+    if not rows_data:
+        raise ValueError("reaction_jets: wymagana niepusta lista 'rows'")
+    rows = []
+    for i, r in enumerate(rows_data):
+        if "x" not in r or "n_engines" not in r:
+            raise ValueError(f"reaction_jets.rows[{i}]: wymagane pola 'x' i 'n_engines'")
+        rows.append(JetRowConfig(
+            x         = float(r["x"]),
+            n_engines = int(r["n_engines"]),
+            phase_deg = float(r.get("phase_deg", 0.0)),
+        ))
+    e = rj.get("engine", None)
+    if not e or "thrust" not in e or "burn_time" not in e:
+        raise ValueError("reaction_jets.engine: wymagane pola 'thrust' i 'burn_time'")
+    profile = e.get("profile", "rectangular")
+    if not isinstance(profile, str):
+        profile = [[float(a), float(b)] for a, b in profile]
+    engine = JetEngineConfig(
+        thrust              = float(e["thrust"]),
+        burn_time           = float(e["burn_time"]),
+        ignition_delay      = float(e.get("ignition_delay", 0.0)),
+        tilt_axial_deg      = float(e.get("tilt_axial_deg", 0.0)),
+        tilt_tangential_deg = float(e.get("tilt_tangential_deg", 0.0)),
+        profile             = profile,
+    )
+    rate = rj.get("control_rate_hz", 100.0)
+    radius = rj.get("radius", None)
+    return ReactionJetsConfig(
+        rows            = rows,
+        engine          = engine,
+        radius          = None if radius is None else float(radius),
+        control_rate_hz = None if rate is None else float(rate),
     )

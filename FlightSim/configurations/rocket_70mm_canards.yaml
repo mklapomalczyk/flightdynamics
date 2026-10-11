@@ -6,6 +6,11 @@
 
 name: rocket_70mm_canards
 
+# ---- Typ sterowania ------------------------------------------------- #
+# none | canards | reaction_jets  (canards -> sekcje control_surfaces,
+# control, actuator ponizej; reaction_jets -> sekcja reaction_jets)
+control_type: canards
+
 # ---- Warunki lotu dla DATCOM ----------------------------------------- #
 flight_conditions:
   mach:  [0.1, 0.2, 0.3, 0.4, 0.8, 0.9, 1.0, 1.1, 2.3]   # liczby Macha

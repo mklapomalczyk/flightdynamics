@@ -9,6 +9,11 @@ Konwencja Z launch w dół:
 
 Wektor stanu ma 14 składowych gdy launcher.L_rail > 0
 (dodatkowy element rail_dist na końcu).
+
+Sterowanie dyskretne (reaction jets, control/jets.py): gdy force_model.control
+ma is_discrete=True, calkowanie idzie segmentami (_integrate_segmented) z
+granicami na tickach sterownika, zaplonach i wygaszeniach silnikow.
+Pozostale przypadki — jedno wywolanie solve_ivp, bez zmian.
 """
 
 import numpy as np
@@ -147,36 +152,46 @@ def run_simulation_6dof(
         return force_model.derivatives(t, x)
 
     # ---- Integracja ----------------------------------------------------- #
-    result = solve_ivp(
-        fun          = derivatives_projected,
-        t_span       = t_span,
-        y0           = x0,
-        method       = method,
-        t_eval       = t_eval,
-        events       = events,
-        rtol         = rtol,
-        atol         = atol,
-        max_step     = max_step,
-        dense_output = False,
-    )
+    control = getattr(force_model, "control", None)
+    jet_events = []
+    if getattr(control, "is_discrete", False):
+        # Sterowanie dyskretne (reaction jets) — calkowanie segmentami.
+        res_t, res_y, t_events = _integrate_segmented(
+            derivatives_projected, x0, t_max, t_eval, events, control,
+            method=method, rtol=rtol, atol=atol, max_step=max_step)
+        jet_events = list(control.events)
+    else:
+        result = solve_ivp(
+            fun          = derivatives_projected,
+            t_span       = t_span,
+            y0           = x0,
+            method       = method,
+            t_eval       = t_eval,
+            events       = events,
+            rtol         = rtol,
+            atol         = atol,
+            max_step     = max_step,
+            dense_output = False,
+        )
 
-    # Określ status symulacji
-    if not result.success and result.status != 1:
-        raise RuntimeError(f"Solver 6DOF nie zbiegł: {result.message}")
+        # Określ status symulacji
+        if not result.success and result.status != 1:
+            raise RuntimeError(f"Solver 6DOF nie zbiegł: {result.message}")
+        res_t, res_y, t_events = result.t, result.y, result.t_events
 
     if _tumble_state["triggered"]:
         sim_status = "tumbling"
         print(f"[solver] Tumbling wykryty — sqrt(q²+r²) > 500°/s przez {_TUMBLE_DURATION}s")
-    elif len(result.t_events[2]) > 0:   # blowup_event
+    elif len(t_events[2]) > 0:   # blowup_event
         sim_status = "blowup"
-        print(f"[solver] Blow-up prędkości wykryty w t={result.t_events[2][0]:.2f}s")
+        print(f"[solver] Blow-up prędkości wykryty w t={t_events[2][0]:.2f}s")
     else:
         sim_status = "ok"
 
     # ---- Projekcja wiązań szyny na zapisanych punktach t_eval ----------- #
     # solve_ivp interpoluje punkty t_eval z gęstego wyjścia — mogą zawierać
     # małe wartości v/w/qr. Zerujemy je post-hoc dla czystości wyników.
-    y = result.y.copy()
+    y = res_y.copy()
     if L_rail > 0.0:
         rail_dist_arr = y[13, :]
         on_rail_mask  = rail_dist_arr < L_rail
@@ -186,5 +201,103 @@ def run_simulation_6dof(
     ctrl_idx = 0
     if _n_ctrl > 0:
         ctrl_idx = 15 if _dual_spin_active else 14
-    return SimResult6DOF.from_raw(result.t, y, status=sim_status,
-                                  ctrl_idx=ctrl_idx)
+    res = SimResult6DOF.from_raw(res_t, y, status=sim_status,
+                                 ctrl_idx=ctrl_idx)
+    res.jet_events = jet_events
+    return res
+
+
+# ============================================================================
+# Calkowanie segmentami — sterowanie dyskretne (reaction jets)
+# ============================================================================
+
+def _integrate_segmented(fun, x0, t_max, t_eval, events, system,
+                         method="RK45", rtol=1e-6, atol=1e-8, max_step=0.05):
+    """
+    Calkuje [0, t_max] seria wywolan solve_ivp. Granice segmentow:
+
+      * ticki sterownika   — regularne (system.tick_rate_hz) i/lub znane
+                             z gory (commander.planned_times()); w kazdym
+                             ticku sterownik dostaje zaakceptowany stan,
+      * zaplony, wezly profilu i wygaszenia silnikow — dopisywane w chwili
+        decyzji, wiec czasy zaplonu NIE musza byc znane przed symulacja.
+
+    Dzieki temu solver nigdy nie przeskoczy impulsu (nawet 1 ms przy
+    max_step = 50 ms), a kazdy impuls zaczyna sie i konczy dokladnie na
+    granicy segmentu. Poza impulsami krok jest normalny (max_step).
+
+    Zwraca (t, y, t_events) w tej samej postaci co solve_ivp z t_eval.
+    """
+    eps = 1e-9
+    system.reset()
+
+    rate = system.tick_rate_hz
+    planned = sorted({float(p) for p in system.commander.planned_times()
+                      if 0.0 <= float(p) < t_max})
+
+    def next_tick_after(t):
+        cands = [p for p in planned if p > t + eps]
+        nt = cands[0] if cands else np.inf
+        if rate:
+            k = np.floor(t * rate + eps) + 1.0
+            nt = min(nt, k / rate)
+        return nt
+
+    t = 0.0
+    x = np.array(x0, dtype=float)
+    t_prev_tick = -np.inf
+    next_tick = 0.0                      # pierwszy tick zawsze w t = 0
+    T_out, Y_out = [], []
+    ev_hits = [[] for _ in events]
+
+    try:
+        while t < t_max - eps:
+            if t >= next_tick - eps:
+                system.tick(t, t_prev_tick, x)
+                t_prev_tick = t
+                next_tick = next_tick_after(t)
+
+            t_next = min(next_tick, system.next_switch_after(t), t_max)
+            system.begin_segment(t, t_next)
+
+            sol = solve_ivp(
+                fun          = fun,
+                t_span       = (t, t_next),
+                y0           = x,
+                method       = method,
+                events       = events,
+                rtol         = rtol,
+                atol         = atol,
+                max_step     = system.segment_max_step(max_step),
+                dense_output = True,
+            )
+            if not sol.success and sol.status != 1:
+                raise RuntimeError(f"Solver 6DOF nie zbiegł (segment "
+                                   f"[{t:.4f}, {t_next:.4f}]): {sol.message}")
+            for i, te in enumerate(sol.t_events):
+                ev_hits[i].extend(te.tolist())
+
+            t_end = float(sol.t[-1])
+            # Ostatni segment zamyka przedzial (jak t_eval w solve_ivp).
+            last = sol.status == 1 or t_end >= t_max - eps
+            mask = (t_eval >= t - eps) & ((t_eval <= t_end + eps) if last
+                                          else (t_eval < t_end - eps))
+            seg_eval = t_eval[mask]
+            if seg_eval.size:
+                T_out.append(seg_eval)
+                Y_out.append(sol.sol(np.clip(seg_eval, t, t_end)))
+
+            x = sol.y[:, -1].copy()
+            t = t_end
+            if sol.status == 1:          # zdarzenie terminalne (grunt, blow-up)
+                break
+    finally:
+        system.end_segments()
+
+    if T_out:
+        t_all = np.concatenate(T_out)
+        y_all = np.concatenate(Y_out, axis=1)
+    else:
+        t_all = np.zeros(0)
+        y_all = np.zeros((len(x0), 0))
+    return t_all, y_all, [np.array(h) for h in ev_hits]
