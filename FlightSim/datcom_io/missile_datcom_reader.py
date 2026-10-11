@@ -32,6 +32,22 @@ class MissileDatcomAero:
     xcg:    float
     lref:   float
     sref:   float
+    CA_base: np.ndarray = field(default_factory=lambda: np.array([]))  # opor denny [-]
+    # Kolumny CY i CLN z bloku LONGITUDINAL/LATERAL DIRECTIONAL. Naglowek to
+    # "ALPHA CN CM CA CY CLN CLL" -- czytnik bral dotad tylko parts[0..3] i
+    # parts[6], POMIJAJAC CY (parts[4]) i CLN (parts[5]). CLN jest potrzebny do
+    # zmierzenia skutecznosci sterowania w osi yaw (Cn_delta) zamiast zakladania
+    # symetrii Cn_delta = -Cm_delta -- przy historii bledow znakowych w tym
+    # projekcie lepiej mierzyc niz zakladac.
+    # Domyslnie puste, zeby stare pickle/wywolania dalej dzialaly.
+    CY:     np.ndarray = field(default_factory=lambda: np.array([]))   # side force [-]
+    CLN:    np.ndarray = field(default_factory=lambda: np.array([]))   # yawing moment [-]
+    case_id: int = 1     # numer przypadku DATCOM (dla decków SAVE/NEXT CASE)
+    # Tekst karty CASEID przepisany przez DATCOM w naglowku strony, np.
+    # "D_YAW DELTA=+6.0". Wiaze przypadek z kanalem sterowania BEZ polegania
+    # na kolejnosci — istotne, bo przy urwanym przebiegu (crash DATCOM) liczba
+    # przypadkow w pliku nie zgadza sie z liczba kart CASEID w echu wejscia.
+    case_label: str = ""
 
 
 @dataclass
@@ -49,9 +65,18 @@ class MissileDatcomResult:
         return None
 
 
-def parse_missile_datcom_output(output_path) -> MissileDatcomResult:
-    lines = Path(output_path).read_text(encoding="ascii", errors="replace").splitlines()
+def parse_missile_datcom_output(output_path, dedupe_by_mach: bool = True) -> MissileDatcomResult:
+    text = Path(output_path).read_text(encoding="ascii", errors="replace")
+    lines = text.splitlines()
     result = MissileDatcomResult()
+
+    # Tabela wynikow drukuje REF LENGTH/REF AREA zaokraglone (np. LREF=0.036
+    # jako "0.04", SREF=0.001018 jako "0.001"). Plik .out zawiera tez echo
+    # decku wejsciowego z pelna precyzja ("LREF=0.0360,") — uzywamy go.
+    m_l = re.search(r"\bLREF\s*=\s*([\d.]+)", text)
+    m_s = re.search(r"\bSREF\s*=\s*([\d.Ee+\-]+?)\s*,", text)
+    lref_echo = float(m_l.group(1)) if m_l else None
+    sref_echo = float(m_s.group(1)) if m_s else None
 
     i = 0
     while i < len(lines):
@@ -73,11 +98,38 @@ def parse_missile_datcom_output(output_path) -> MissileDatcomResult:
             if m: lref = float(m.group(1))
             if all(v is not None for v in [mach, xcg, sref, lref]):
                 break
+        if lref_echo is not None:
+            lref = lref_echo
+        if sref_echo is not None:
+            sref = sref_echo
 
         if None in [mach, xcg, sref, lref]:
             i += 1; continue
 
         cn_data, xcp_data, cna_data, cyb_data, cllp_data, cll_data = [], [], [], [], [], []
+        cy_data, cln_data = [], []
+
+        # Numer przypadku DATCOM — naglowek strony ma postac
+        #   ***** THE USAF AUTOMATED MISSILE DATCOM * REV 3/99 *****   CASE   N
+        # Szukamy wstecz najblizszego takiego naglowka. Potrzebne dla decków
+        # skladanych (SAVE / NEXT CASE), gdzie kolejne przypadki powtarzaja te
+        # same liczby Macha i inaczej nie da sie ich rozroznic.
+        case_id = 1
+        case_label = ""
+        for jb in range(i, max(-1, i - 400), -1):
+            mcase = re.search(r"MISSILE DATCOM.*CASE\s+(\d+)", lines[jb])
+            if mcase:
+                case_id = int(mcase.group(1))
+                # Etykieta CASEID stoi w naglowku strony miedzy linia
+                # "AERODYNAMIC METHODS..." a naglowkiem sekcji.
+                for jl in range(jb + 1, min(jb + 6, len(lines))):
+                    cand = lines[jl].strip()
+                    if (cand and "AERODYNAMIC METHODS" not in cand
+                            and "STATIC AERODYNAMICS" not in cand
+                            and "*****" not in cand and "PAGE" not in cand):
+                        case_label = cand
+                        break
+                break
 
         # Znajdź koniec tej sekcji (następny nagłówek STATIC AERODYNAMICS)
         next_section = len(lines)
@@ -101,9 +153,13 @@ def parse_missile_datcom_output(output_path) -> MissileDatcomResult:
                     if len(parts) >= 4:
                         try:
                             cll = float(parts[6]) if len(parts) >= 7 else 0.0
+                            cy  = float(parts[4]) if len(parts) >= 6 else 0.0
+                            cln = float(parts[5]) if len(parts) >= 6 else 0.0
                             cn_data.append((float(parts[0]), float(parts[1]),
                                             float(parts[2]), float(parts[3])))
                             cll_data.append((float(parts[0]), cll))
+                            cy_data.append((float(parts[0]), cy))
+                            cln_data.append((float(parts[0]), cln))
                         except ValueError:
                             pass
                     k += 1
@@ -195,6 +251,9 @@ def parse_missile_datcom_output(output_path) -> MissileDatcomResult:
                 CLLP  = np.array([r[1] for r in cllp_data]) if len(cllp_data) == len(cn_data) else np.zeros(len(cn_data)),
                 CYB   = np.array([r[1] for r in cyb_data])  if len(cyb_data)  == len(cn_data) else np.zeros(len(cn_data)),
                 CLL   = np.array([r[1] for r in cll_data])  if len(cll_data)  == len(cn_data) else np.zeros(len(cn_data)),
+                CY    = np.array([r[1] for r in cy_data])   if len(cy_data)   == len(cn_data) else np.zeros(len(cn_data)),
+                CLN   = np.array([r[1] for r in cln_data])  if len(cln_data)  == len(cn_data) else np.zeros(len(cn_data)),
+                case_id = case_id, case_label = case_label,
                 xcg=xcg, lref=lref, sref=sref,
             ))
         elif not cn_data and (cna_data or cllp_data) and result.cases:
@@ -209,18 +268,113 @@ def parse_missile_datcom_output(output_path) -> MissileDatcomResult:
                     break
         i = k
 
-    # Usuń duplikaty, posortuj
-    seen, unique = set(), []
-    for c in sorted(result.cases, key=lambda x: x.mach):
-        if c.mach not in seen:
-            seen.add(c.mach); unique.append(c)
-    result.cases = unique
+    # --- Drugi przebieg: opor denny (CA-BASE) z sekcji rozbicia CA -------
+    # DATCOM drukuje rozbicie oporu osiowego w tabeli:
+    #   ALPHA  CA-FRIC  CA-PRES/WAVE  CA-BASE  CA-PROT  CA-SEP  CA-ALP
+    # (sekcja "BODY ALONE PARTIAL OUTPUT", jedna na Mach). CA-BASE to
+    # skladowa denna calkowitego CA — potrzebna do modelu z napędem
+    # (plomien silnika wypelnia den, opor denny ~0 podczas spalania) vs
+    # bez napedu (pelny opor denny podczas lotu balistycznego). CA-PROT i
+    # CA-SEP bywaja puste, wiec CA-BASE to zawsze 4. kolumna liczbowa
+    # (parts[3]).
+    base_by_mach = {}   # mach -> list[(alpha, CA_base)]
+    cur_mach = None
+    bi = 0
+    while bi < len(lines):
+        m = re.search(r"MACH NO\s*=\s*([\d.]+)", lines[bi])
+        if m:
+            cur_mach = float(m.group(1))
+        if "CA-FRIC" in lines[bi] and "CA-BASE" in lines[bi] and cur_mach is not None:
+            rows = []
+            bk = bi + 1
+            while bk < len(lines):
+                s = lines[bk].strip()
+                if not s:
+                    if rows:
+                        break
+                    bk += 1
+                    continue
+                parts = s.split()
+                if len(parts) >= 4:
+                    try:
+                        rows.append((float(parts[0]), float(parts[3])))
+                    except ValueError:
+                        break
+                else:
+                    break
+                bk += 1
+            if rows:
+                base_by_mach.setdefault(round(cur_mach, 4), rows)
+            bi = bk
+            continue
+        bi += 1
+
+    for c in result.cases:
+        rows = base_by_mach.get(round(c.mach, 4))
+        if rows:
+            a_b = np.array([r[0] for r in rows])
+            v_b = np.array([r[1] for r in rows])
+            # dopasuj do siatki alpha przypadku (zwykle identyczna)
+            if len(a_b) == len(c.alpha) and np.allclose(a_b, c.alpha, atol=0.1):
+                c.CA_base = v_b
+            else:
+                c.CA_base = np.interp(c.alpha, a_b, v_b)
+        else:
+            c.CA_base = np.zeros(len(c.alpha))
+
+    # Usuń duplikaty, posortuj.
+    # UWAGA: deduplikacja po Machu jest poprawna TYLKO dla decków
+    # jednoprzypadkowych. Dla decków skladanych (SAVE / NEXT CASE, sweep
+    # wychylen sterow) kolejne przypadki powtarzaja te same Machy i zostalyby
+    # tu po cichu wyrzucone -- dlatego sweep uzywa parse_missile_datcom_cases()
+    # ponizej, ktora grupuje po numerze przypadku. Domyslne zachowanie tej
+    # funkcji zostaje NIEZMIENIONE (zwalidowana sciezka aero bazowego).
+    if dedupe_by_mach:
+        seen, unique = set(), []
+        for c in sorted(result.cases, key=lambda x: x.mach):
+            if c.mach not in seen:
+                seen.add(c.mach); unique.append(c)
+        result.cases = unique
 
     if not result.cases:
         print(f"[MissileDatcom] Ostrzezenie: brak danych w {output_path}")
-    else:
+    elif dedupe_by_mach:
         print(f"[MissileDatcom] Wczytano {len(result.cases)} przypadkow Mach: {result.mach_list}")
     return result
+
+
+def parse_missile_datcom_cases(output_path) -> "list[MissileDatcomResult]":
+    """
+    Parser swiadomy przypadkow — dla decków skladanych (SAVE / NEXT CASE).
+
+    Zwraca liste MissileDatcomResult, po jednym na przypadek DATCOM,
+    posortowana po numerze przypadku. Wewnatrz kazdego przypadku obowiazuje
+    zwykla deduplikacja po Machu.
+
+    Jest to scisle uogolnienie parse_missile_datcom_output(): dla pliku
+    jednoprzypadkowego zwraca dokladnie jeden element, identyczny z wynikiem
+    starej funkcji (sprawdzane w tests/test_datcom_control_deck.py).
+    """
+    flat = parse_missile_datcom_output(output_path, dedupe_by_mach=False)
+
+    by_case: dict = {}
+    for c in flat.cases:
+        by_case.setdefault(c.case_id, []).append(c)
+
+    groups = []
+    for cid in sorted(by_case):
+        seen, unique = set(), []
+        for c in sorted(by_case[cid], key=lambda x: x.mach):
+            if c.mach not in seen:
+                seen.add(c.mach); unique.append(c)
+        r = MissileDatcomResult()
+        r.cases = unique
+        groups.append(r)
+
+    print(f"[MissileDatcom] Wczytano {len(groups)} przypadkow DATCOM "
+          f"z {output_path} (Machy/przypadek: "
+          f"{[len(g.cases) for g in groups]})")
+    return groups
 
 
 def missile_datcom_to_table_aero(result: MissileDatcomResult) -> dict:
@@ -237,10 +391,14 @@ def missile_datcom_to_table_aero(result: MissileDatcomResult) -> dict:
     CLLP_t = np.zeros((n_a, n_m))
     CYB_t  = np.zeros((n_a, n_m))
     CLL_t  = np.zeros((n_a, n_m))
+    CAB_t  = np.zeros((n_a, n_m))
     for j, c in enumerate(result.cases):
         CN_t[:,j]=c.CN; CA_t[:,j]=c.CA; XCP_t[:,j]=c.XCP; CM_t[:,j]=c.CM
         CNA_t[:,j]=c.CNA; CLLP_t[:,j]=c.CLLP; CYB_t[:,j]=c.CYB; CLL_t[:,j]=c.CLL
+        if getattr(c, "CA_base", None) is not None and len(c.CA_base) == n_a:
+            CAB_t[:,j] = c.CA_base
     return dict(alpha_deg=alphas, mach=machs, CN=CN_t, CA=CA_t,
                 XCP=XCP_t, CM=CM_t, CNA=CNA_t, CLLP=CLLP_t, CYB=CYB_t, CLL=CLL_t,
+                CA_base=CAB_t,
                 xcg=result.cases[0].xcg,
                 lref=result.cases[0].lref, sref=result.cases[0].sref)

@@ -127,6 +127,25 @@ def main():
     print(f"  Apogeum: {alt_ob.max():.1f}m")
     print(f"  Vmax: {vel_ob.max():.1f}m/s (ograniczony przez GPS)")
 
+    # Blad poziomy CZYSTEGO IMU (bez fuzji) wzgledem GPS -- kwantyfikuje,
+    # jak dobrze sama inercyjna rekonstrukcja (strapdown, bez korekcji GPS)
+    # trzyma sie rzeczywistosci. Wazne po naprawie znaku AX/roll (patrz
+    # imu_reconstruction.reconstruct) -- duzy blad tutaj wskazuje na
+    # akumulujacy sie blad orientacji/calkowania, nie na sam pomiar GPS.
+    mask_g = (tel.time >= t_ign) & (tel.time <= t_end)
+    e_g, n_g = latlon_to_enu(tel.lat[mask_g], tel.lon[mask_g],
+                              tel.lat[mask_g][0], tel.lon[mask_g][0])
+    t_g = tel.time[mask_g]
+    e_imu_i = np.interp(t_g, traj.time, traj.pos[:, 0])
+    n_imu_i = np.interp(t_g, traj.time, traj.pos[:, 1])
+    horiz_err = np.sqrt((e_imu_i - e_g) ** 2 + (n_imu_i - n_g) ** 2)
+    print(f"\nBlad poziomy IMU (bez fuzji) vs GPS:")
+    print(f"  RMS: {np.sqrt(np.mean(horiz_err**2)):.0f}m")
+    print(f"  na koncu okna: {horiz_err[-1]:.0f}m")
+    if len(t_g) > 1:
+        i_mid = len(t_g) // 2
+        print(f"  w polowie okna (t={t_g[i_mid]-t_ign:.1f}s): {horiz_err[i_mid]:.0f}m")
+
     # ---------------- Wykresy ----------------
     fig, axes = plt.subplots(2, 3, figsize=(16, 9))
     fig.suptitle(f"Rekonstrukcja IMU + fuzja GPS — Lot {flight_no} "

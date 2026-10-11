@@ -265,6 +265,13 @@ class SimResult6DOF:
     qr:    np.ndarray
     r:     np.ndarray
     p_fwd:  np.ndarray = field(default_factory=lambda: np.array([]))
+    # Stany aktuatora (opcjonalne) — wychylenie [deg] i prędkość [deg/s] na kanał
+    d_pitch_act: np.ndarray = field(default_factory=lambda: np.array([]))
+    d_yaw_act:   np.ndarray = field(default_factory=lambda: np.array([]))
+    d_roll_act:  np.ndarray = field(default_factory=lambda: np.array([]))
+    d_pitch_rate: np.ndarray = field(default_factory=lambda: np.array([]))
+    d_yaw_rate:   np.ndarray = field(default_factory=lambda: np.array([]))
+    d_roll_rate:  np.ndarray = field(default_factory=lambda: np.array([]))
     status: str        = field(default="ok")  # "ok" | "tumbling" | "blowup" | "timeout"
 
     # Wielkości pochodne
@@ -301,14 +308,25 @@ class SimResult6DOF:
 
     @classmethod
     def from_raw(cls, t: np.ndarray, y: np.ndarray,
-                 status: str = "ok") -> "SimResult6DOF":
+                 status: str = "ok",
+                 ctrl_idx: int = 0) -> "SimResult6DOF":
+        n_ch = 0
+        if ctrl_idx > 0 and y.shape[0] > ctrl_idx:
+            n_ch = min((y.shape[0] - ctrl_idx) // 2, 3)
+        empty = np.zeros_like(t)
         return cls(
             t=t,
             x=y[IDX_X],  y=y[IDX_Y],  z=y[IDX_Z],
             u=y[IDX_U],  v=y[IDX_V],  w=y[IDX_W],
             q0=y[IDX_Q0], q1=y[IDX_Q1], q2=y[IDX_Q2], q3=y[IDX_Q3],
             p=y[IDX_P],  qr=y[IDX_QR], r=y[IDX_R],
-            p_fwd=y[IDX_PFWD] if y.shape[0] > IDX_PFWD else np.zeros_like(y[IDX_P]),
+            p_fwd=y[IDX_PFWD] if y.shape[0] > IDX_PFWD else empty.copy(),
+            d_pitch_act=y[ctrl_idx]     if n_ch >= 1 else empty.copy(),
+            d_yaw_act=y[ctrl_idx + 2]   if n_ch >= 2 else empty.copy(),
+            d_roll_act=y[ctrl_idx + 4]  if n_ch >= 3 else empty.copy(),
+            d_pitch_rate=y[ctrl_idx + 1] if n_ch >= 1 else empty.copy(),
+            d_yaw_rate=y[ctrl_idx + 3]   if n_ch >= 2 else empty.copy(),
+            d_roll_rate=y[ctrl_idx + 5]  if n_ch >= 3 else empty.copy(),
             status=status,
         )
 

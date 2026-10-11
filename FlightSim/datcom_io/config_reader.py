@@ -66,6 +66,14 @@ class FinSet:
 
 @dataclass
 class ControlSurface:
+    """
+    Powierzchnia sterowa (np. canardy).
+
+    Geometrycznie zachowuje sie jak FinSet — generator DATCOM zamienia ja na
+    dodatkowy $FINSET (patrz missile_datcom_generator._effective_fin_sets),
+    bo DATCOM nie ma osobnego pojecia "powierzchni sterowej": kazdy zestaw
+    paneli to $FINSETn, a wychylenie zadaje sie przez DELTAn w $DEFLCT.
+    """
     name:       str
     count:      int
     position:   float
@@ -73,10 +81,25 @@ class ControlSurface:
     root_chord: float
     tip_chord:  float
     sweep_le:   float
-    deflection: float = 0.0
+    deflection: float = 0.0   # wychylenie referencyjne [deg]
+    thickness:  float = 0.002
+    profile:    str   = "hex"
+    cant_angle: float = 0.0   # canardy zwykle bez zaklinowania
+    # Zarezerwowane na przyszlosc — mapowanie kanalow sterowania na panele.
+    # v1 uzywa standardowych wzorcow krzyzowych z control/derivatives.py.
+    channel_map: Optional[dict] = None
 
 
 @dataclass
+class ActuatorConfig:
+    """Konfiguracja aktuatora — parsowana z YAML."""
+    type:              str   = "zero_order"
+    wn:                float = 60.0
+    zeta:              float = 0.7
+    rate_limit_deg_s:  float = 400.0
+    pos_limit_deg:     float = 15.0
+
+
 @dataclass
 class DualSpinSection:
     """Parametry jednej sekcji rakiety dual-spin."""
@@ -142,6 +165,7 @@ class RocketConfig:
     fins:             List[FinSet]
     mass:             Mass
     control_surfaces: List[ControlSurface] = field(default_factory=list)
+    actuator:         Optional["ActuatorConfig"]   = None
     mass_model:       Optional["MassModelConfig"]  = None
     propulsion:       Optional["PropulsionConfig"] = None
     dual_spin:        Optional["DualSpinConfig"]   = None
@@ -226,7 +250,23 @@ def load_config(yaml_path: Path) -> RocketConfig:
             tip_chord  = float(cs["tip_chord"]),
             sweep_le   = float(cs["sweep_le"]),
             deflection = float(cs.get("deflection", 0.0)),
+            thickness  = float(cs.get("thickness", 0.002)),
+            profile    = cs.get("profile", "hex"),
+            cant_angle = float(cs.get("cant_angle", 0.0)),
+            channel_map= cs.get("channel_map", None),
         ))
+
+    # ---- Actuator ------------------------------------------------------ #
+    act_data = data.get("actuator", None)
+    actuator_cfg = None
+    if act_data is not None:
+        actuator_cfg = ActuatorConfig(
+            type             = str(act_data.get("type", "zero_order")),
+            wn               = float(act_data.get("wn", 60.0)),
+            zeta             = float(act_data.get("zeta", 0.7)),
+            rate_limit_deg_s = float(act_data.get("rate_limit_deg_s", 400.0)),
+            pos_limit_deg    = float(act_data.get("pos_limit_deg", 15.0)),
+        )
 
     # ---- Mass --------------------------------------------------------- #
     mass = Mass(xcg_ref=float(data["mass"]["xcg_ref"]))
@@ -285,6 +325,7 @@ def load_config(yaml_path: Path) -> RocketConfig:
         fins              = fins,
         mass              = mass,
         control_surfaces  = control,
+        actuator          = actuator_cfg,
         mass_model        = mass_model,
         dual_spin         = dual_spin,
         propulsion        = propulsion,

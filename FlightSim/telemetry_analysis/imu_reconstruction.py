@@ -82,6 +82,60 @@ def reconstruct_roll_from_ax(tel, t_ignition, sat_threshold=1990.0):
     return roll_rate
 
 
+def reconstruct_roll_from_ax_const_sign(tel, t_ignition, sat_threshold=1990.0,
+                                          sign_ref_t_start=5.0, sign_ref_t_end=8.0):
+    """
+    Wariant reconstruct_roll_from_ax() ze STALYM znakiem zamiast
+    "ostatniego znanego znaku" per-probka.
+
+    Motywacja: |AX_scaled| (modul, PRZED przypisaniem znaku) jest sam w
+    sobie GLADKI i fizycznie sensowny od t~1s po zaplonie (rosnie do
+    szczytu w okolicy burnout, potem monotonicznie opada, plynnie
+    laczac sie z segmentem t>=5s bez nieciaglosci) -- ZWERYFIKOWANE
+    numerycznie dla lotu 19. Pozorna erratyczna oscylacja +/- w
+    reconstruct_roll_from_ax() to WYLACZNIE artefakt kruchej logiki
+    "ostatni znany znak" (gyro_X czesto wysyca sie w tym oknie, a
+    krotkie, zaszumione zejscia ponizej progu wysycenia moga wstrzykiwac
+    falszywe zmiany znaku). Rakieta ze stalym zaklinowaniem pletw nie
+    odwraca kierunku obrotu w trakcie wznoszenia, wiec STALY znak
+    (ustalony tam, gdzie gyro_X jest wiarygodny, tj. w segmencie
+    [sign_ref_t_start, sign_ref_t_end] od zaplonu) jest fizycznie
+    uzasadniony na cala probke.
+
+    Zwraca: roll_rate [st/s] ze stalym znakiem, tej samej dlugosci co
+    tel.time. None jesli brak kolumny AX lub nie da sie ustalic znaku
+    referencyjnego.
+    """
+    ax = tel.raw_columns.get("gyro_ax")
+    if ax is None:
+        return None
+
+    gx = tel.gyro_x
+    t_rel = tel.time - t_ignition
+
+    rest = tel.time < (t_ignition - 0.5)
+    if np.sum(rest) < 5:
+        rest = tel.time < t_ignition
+    ax_offset = np.nanmean(ax[rest]) if np.sum(rest) > 0 else 0.0
+    ax_cal = ax - ax_offset
+
+    notsat = (np.abs(gx) < sat_threshold) & (np.abs(gx) > 100)
+    if np.sum(notsat) > 20:
+        scale = np.nanmedian(np.abs(gx[notsat]) / (np.abs(ax_cal[notsat]) + 1e-9))
+    else:
+        scale = 1.0
+    ax_scaled = np.abs(ax_cal) * scale
+
+    ref_mask = (t_rel >= sign_ref_t_start) & (t_rel < sign_ref_t_end)
+    if np.sum(ref_mask) < 5:
+        return None
+    const_sign = float(np.sign(np.nanmedian(gx[ref_mask])))
+    if const_sign == 0.0:
+        const_sign = 1.0
+
+    return ax_scaled * const_sign
+
+
 def detect_ignition(tel):
     """
     Wykrywa moment zaplonu (start lotu).
@@ -325,10 +379,22 @@ def reconstruct(tel, cal, q0, t_start=0.0, t_end=None, use_ax_roll=True):
     q0   — kwaternion orientacji poczatkowej
     t_start, t_end — zakres czasu do rekonstrukcji (lot wlasciwy)
     use_ax_roll — jesli True i dostepna kolumna AX, uzyj zrekonstruowanego
-                  rolla z high-range czujnika AX zamiast wysyconego gyro_X.
-                  Krytyczne dla lotow z duzym rollem (gyro_X wysyca sie na
-                  ±2000 st/s, a roll siega kilku tys.). Bez tego orientacja
-                  — a wiec trajektoria — jest bledna.
+                  rolla z high-range czujnika AX (reconstruct_roll_from_ax_const_sign
+                  -- STALY znak, patrz jej docstring) zamiast wysyconego
+                  gyro_X. Krytyczne dla lotow z duzym rollem (gyro_X wysyca
+                  sie na ±2000 st/s, a roll siega kilku tys.). Bez tego
+                  orientacja — a wiec trajektoria — jest bledna.
+
+                  UWAGA: wczesniej uzywano reconstruct_roll_from_ax()
+                  (per-probkowa logika "ostatni znany znak"), ktora daje
+                  erratyczna oscylacje +/- w oknie t<~5s po zaplonie
+                  (dokladnie najbardziej dynamiczna faza wznoszenia) --
+                  ZWERYFIKOWANE, ze to byl WYLACZNIE artefakt odzyskiwania
+                  znaku (modul |AX| jest sam w sobie gladki), nie prawdziwa
+                  oscylacja kierunku obrotu. Ten blad wstrzykiwal duzy
+                  blad orientacji dokladnie w oknie najwiekszego
+                  przyspieszenia poprzecznego, kumulujacy sie w reszcie
+                  calkowania kwaternionu.
     """
     if t_end is None:
         t_end = tel.time[-1]
@@ -346,7 +412,7 @@ def reconstruct(tel, cal, q0, t_start=0.0, t_end=None, use_ax_roll=True):
     # Roll: z AX (high-range) jesli dostepny, inaczej gyro_X
     roll_src = None
     if use_ax_roll:
-        roll_src = reconstruct_roll_from_ax(tel, t_start)
+        roll_src = reconstruct_roll_from_ax_const_sign(tel, t_start)
     if roll_src is not None:
         gx = np.radians(roll_src[idx])   # AX juz ma odjety offset/skale
     else:

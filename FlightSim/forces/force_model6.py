@@ -34,10 +34,25 @@ from models.mass6 import MassModel6DOF
 from models.aerodynamics import AeroModel
 from models.gravity import GravityModel
 from models.launcher import LauncherConfig, RailLauncher
+from models.wind import WindModel
 
 # Rozmiar wektora stanu z rail_dist
 STATE_SIZE_6DOF_RAIL = 14
 IDX_RAIL_DIST = 13
+
+# Zerowy wektor sil/momentow sterowania — read-only, wspoldzielony.
+# Unikamy alokacji np.zeros(3) przy kazdym wywolaniu derivatives() (gorący tor:
+# kilka razy na krok RK45) w najczestszym przypadku control=None.
+_ZERO3 = np.zeros(3)
+_ZERO3.flags.writeable = False
+
+_RATE_KEYS = ("d_pitch_rate", "d_yaw_rate", "d_roll_rate")
+
+def _ctrl_xa_to_rates(xa, n_states):
+    if xa is None or n_states < 2:
+        return {}
+    n_ch = n_states // 2
+    return {_RATE_KEYS[i]: float(xa[2 * i + 1]) for i in range(min(n_ch, 3))}
 
 
 @dataclass
@@ -82,6 +97,8 @@ class ForceModel6DOF:
         launcher:    Optional[LauncherConfig] = None,
         logger:      Optional[object]         = None,
         cfg:         Optional[object]         = None,
+        wind_model:  Optional[WindModel]      = None,
+        control:     Optional[object]         = None,
     ):
         self.atmosphere = atmosphere
         self.mass_model = mass_model
@@ -93,6 +110,14 @@ class ForceModel6DOF:
             launcher if launcher is not None else LauncherConfig(L_rail=0.0)
         )
         self.logger     = logger
+        self.wind_model = wind_model
+        # Modul sterowania (control/system.py::ControlSystem) — opcjonalny,
+        # wzorem wind_model: trzymany surowo, sprawdzany w miejscu uzycia.
+        # None => model zachowuje sie dokladnie jak przed dodaniem sterowania.
+        self.control    = control
+        self._n_ctrl_states = 0
+        if control is not None and hasattr(control, 'n_states'):
+            self._n_ctrl_states = int(control.n_states)
         # Dual-spin — opcjonalnie z cfg
         self._dual_spin = None
         if cfg is not None and getattr(cfg, 'dual_spin', None) is not None:
@@ -144,23 +169,49 @@ class ForceModel6DOF:
             v, w  = state.v, state.w
             p, qr, r = state.p, state.qr, state.r
 
+        # ---- Wiatr -> predkosc wzgledem powietrza (tylko do aero) ------- #
+        # Wiatr aktywny TYLKO poza szyna (jak v,w,p,qr,r). u_air/v_air/w_air
+        # uzywane WYLACZNIE do katow aero/mach/q_dyn — dynamika (du_dt itd.)
+        # i kinematyka pozycji (vel_launch) zawsze uzywaja u,v,w wzgledem ziemi.
+        DCM = quat_to_dcm(q)
+        if not on_rail and self.wind_model is not None:
+            wind_lf   = self.wind_model.velocity_launch_frame(t, -state.z)
+            wind_body = DCM @ wind_lf
+            u_air = u - wind_body[0]
+            v_air = v - wind_body[1]
+            w_air = w - wind_body[2]
+        else:
+            u_air, v_air, w_air = u, v, w
+
         # ---- Kąty aerodynamiczne ---------------------------------------- #
-        alpha, beta = aero_angles(u, v, w)
-        speed = float(np.sqrt(u**2 + v**2 + w**2))
+        alpha, beta = aero_angles(u_air, v_air, w_air)
+        speed = float(np.sqrt(u_air**2 + v_air**2 + w_air**2))
         mach  = atm.mach(speed)
         q_dyn = 0.5 * atm.density * speed**2
 
+        # Calkowity kat natarcia (alpha+beta) — kat miedzy osia X_body a
+        # wektorem predkosci, niezalezny od plaszczyzny. Uzyty tylko do CA
+        # (opor bryly osiowosymetrycznej), patrz models/aerodynamics.py.
+        if speed > 1e-6:
+            alpha_total = float(np.arccos(np.clip(u_air / speed, -1.0, 1.0)))
+        else:
+            alpha_total = 0.0
+
         # ---- Siły aerodynamiczne ---------------------------------------- #
         aero = self.aero.compute(
-            alpha  = alpha,
-            mach   = mach,
-            q_dyn  = q_dyn,
-            q_rate = qr,
-            speed  = speed,
-            xcg    = xcg,
-            xcp    = self.geom.xcp,
-            S_ref  = self.geom.S_ref,
-            d_ref  = self.geom.d_ref,
+            alpha       = alpha,
+            mach        = mach,
+            q_dyn       = q_dyn,
+            q_rate      = qr,
+            speed       = speed,
+            xcg         = xcg,
+            xcp         = self.geom.xcp,
+            S_ref       = self.geom.S_ref,
+            d_ref       = self.geom.d_ref,
+            alpha_total = alpha_total,
+            beta        = beta,
+            r_rate      = r,
+            powered     = bool(getattr(ms, "is_burning", False)),
         )
 
         FA_x = aero.FA_x
@@ -176,14 +227,22 @@ class ForceModel6DOF:
         CYB_rad   = CYB * (180.0 / np.pi)   # [1/deg] → [1/rad]
         FA_y_aero = CYB_rad * beta * q_dyn * self.geom.S_ref
 
-        # ---- Siła i moment sterowania (placeholder δ=0) ----------------- #
-        delta   = 0.0   # kąt wychylenia [rad] — GNC ustawi w przyszłości
-        F_ctrl  = 0.0   # CN_delta * delta * q_dyn * S_ref
-        M_ctrl  = 0.0   # F_ctrl * (x_ctrl - xcg)
-
         # ---- Momenty aerodynamiczne --------------------------------------- #
-        MA_pitch = aero.MA_yy + M_ctrl
-        MA_yaw   = 0.0
+        # Sterowanie NIE wchodzi tutaj — jest doliczane do sum MX/MY/MZ nizej,
+        # zeby MA_pitch/MA_yaw/MA_roll dalej znaczyly "czysta aerodynamika"
+        # (na tym opieraja sie skrypty analityczne i log sil).
+        MA_pitch = aero.MA_yy
+        # MA_yaw: restoring moment od slizgu (beta) + tlumienie (Cnr=Cmq),
+        # patrz models/aerodynamics.py -- |Cn_beta|=|Cm_alpha| ale ze
+        # znakiem przeciwnym (konwencja osi cial X-przod/Y-prawo/Z-dol
+        # odwraca rcznosc miedzy plaszczyzna pitch i yaw: dbeta/dt~-r,
+        # dalpha/dt~+q), wiec aero.MA_zz juz ma poprawny znak przywracajacy.
+        # Wczesniej hardcoded 0.0, co dawalo nietlumiony/nieprzywracany
+        # ruch yaw pod wiatrem (spurious "tumbling" post-apogeum). Pierwsza
+        # implementacja (commit 01bbfa5) kopiowala znak Cm wprost do Cn,
+        # co dawalo NIEstabilna (dodatnio sprzezona) petle beta/r zamiast
+        # przywracajacej -- naprawione znakiem minus w aerodynamics.py.
+        MA_yaw   = aero.MA_zz
 
         # ---- Moment toczący od zaklinowania płetw (z CLL_table DATCOM) ---- #
         MA_roll_cant = 0.0
@@ -213,7 +272,19 @@ class ForceModel6DOF:
             MA_roll_damp = (Clp_rad * (p * self.geom.d_ref / (2.0 * speed)) *
                             q_dyn * self.geom.S_ref * self.geom.d_ref)
 
-        MA_roll = MA_roll_cant + MA_roll_damp
+        # ---- Stały moment toczący niezależny od zaklinowania (diagnostyka) #
+        # Cl0_manufacturing: opcjonalny atrybut aero (domyślnie 0.0, brak
+        # wpływu na dotychczasowe zachowanie) -- do testowania hipotezy, że
+        # dominujące realne zrodlo toczenia NIE jest proporcjonalne do
+        # cant_angle (np. asymetria silnika/platform, tolerancja produkcyjna
+        # wspolna dla calej floty), patrz check_roll_factors_all_flights.py
+        # i fit_roll_common_torque.py -- loty z cant=0 pokazuja realny roll
+        # porownywalny do lotow z cant!=0, czego czysto cant-driven CLL_table
+        # nie moze wyjasnic.
+        Cl0_manufacturing = getattr(self.aero, 'Cl0_manufacturing', 0.0)
+        MA_roll_const = Cl0_manufacturing * q_dyn * self.geom.S_ref * self.geom.d_ref
+
+        MA_roll = MA_roll_cant + MA_roll_damp + MA_roll_const
 
         # ---- Efekt Magnusa ----------------------------------------------- #
         FA_y_magnus = 0.0
@@ -234,16 +305,38 @@ class ForceModel6DOF:
         M_thrust_pitch = thrust * self.prop.offset_z
         M_thrust_yaw   = thrust * self.prop.offset_y
 
+        # ---- Sterowanie (opcjonalne) ------------------------------------- #
+        # Celowo PO obliczeniu ciagu: efektor TVC bedzie potrzebowal thrust,
+        # wiec FlightState musi go juz zawierac. Przy control=None caly blok
+        # jest zerowy i model zachowuje sie identycznie jak wczesniej.
+        ctrl_F = _ZERO3
+        ctrl_M = _ZERO3
+        ctrl_diag = None
+        _ctrl_xa = None
+        _ctrl_fs = None
+        if self.control is not None:
+            from control.types import FlightState as _FS
+            _ctrl_fs = _FS(
+                t=t, alpha=alpha, beta=beta, mach=mach, q_dyn=q_dyn,
+                speed=speed, p=p, q=qr, r=r, m=m,
+                Ixx=Ixx, Iyy=Iyy, Izz=Izz, xcg=xcg,
+                thrust=thrust, on_rail=bool(on_rail), rho=atm.density,
+            )
+            if self._n_ctrl_states > 0:
+                idx_ctrl = 15 if self._dual_spin is not None else 14
+                _ctrl_xa = x[idx_ctrl:idx_ctrl + self._n_ctrl_states]
+            _wr = self.control.compute(_ctrl_fs, _ctrl_xa)
+            ctrl_F, ctrl_M, ctrl_diag = _wr.F, _wr.M, _wr.diag
+
         # ---- Grawitacja w body frame ------------------------------------ #
-        DCM      = quat_to_dcm(q)
         g_launch = np.array([0.0, 0.0, +g])
         g_body   = DCM @ g_launch
         gx_body, gy_body, gz_body = g_body
 
         # ---- Sumy sił --------------------------------------------------- #
-        FX = FA_x + thrust + m * gx_body
-        FY = FA_y          + m * gy_body
-        FZ = FA_z          + m * gz_body
+        FX = FA_x + thrust + m * gx_body + ctrl_F[0]
+        FY = FA_y          + m * gy_body + ctrl_F[1]
+        FZ = FA_z          + m * gz_body + ctrl_F[2]
 
         # ---- Równania translacji ---------------------------------------- #
         du_dt = FX / m + r*v  - qr*w
@@ -258,9 +351,11 @@ class ForceModel6DOF:
             dw_dt = FZ / m + qr*u - p*v
 
         # ---- Sumy momentów ---------------------------------------------- #
-        MX = MA_roll
-        MY = MA_pitch + M_thrust_pitch
-        MZ = MA_yaw   + M_thrust_yaw
+        # Sterowanie dokladane do sum (wszystkie TRZY osie — wczesniej istnial
+        # tylko martwy placeholder w pitch, a yaw i roll nie mialy go wcale).
+        MX = MA_roll  + ctrl_M[0]
+        MY = MA_pitch + M_thrust_pitch + ctrl_M[1]
+        MZ = MA_yaw   + M_thrust_yaw   + ctrl_M[2]
 
         # ---- Równania rotacji ------------------------------------------- #
         if on_rail:
@@ -320,7 +415,8 @@ class ForceModel6DOF:
                 "FA_x": FA_x, "FA_z": FA_z,
                 "FA_y_aero":   FA_y_aero,
                 "FA_y_magnus": FA_y_magnus,
-                "F_ctrl":  F_ctrl,
+                "F_ctrl":  float(ctrl_F[2]),
+                "F_ctrl_y": float(ctrl_F[1]),
                 "F_thrust": thrust,
                 "Fg_x": m * gx_body,
                 "Fg_y": m * gy_body,
@@ -331,10 +427,14 @@ class ForceModel6DOF:
                 "MA_roll_cant": MA_roll_cant,
                 "MA_roll_damp": MA_roll_damp,
                 "MA_roll":  MA_roll,
-                "M_ctrl":   M_ctrl,
+                "M_ctrl":      float(ctrl_M[1]),
+                "M_ctrl_roll": float(ctrl_M[0]),
+                "M_ctrl_yaw":  float(ctrl_M[2]),
                 "M_thrust_pitch": M_thrust_pitch,
                 "M_thrust_yaw":   M_thrust_yaw,
                 "MX": MX, "MY": MY, "MZ": MZ,
+                **(ctrl_diag or {}),
+                **(_ctrl_xa_to_rates(_ctrl_xa, self._n_ctrl_states)),
             })
 
         # ---- Dual-spin — równania dp_aft_dt i dp_fwd_dt ---------------- #
@@ -389,5 +489,8 @@ class ForceModel6DOF:
             d_rail_dist_dt,
         ])
         if self._dual_spin is not None:
-            return np.append(base, dp_fwd_dt)
+            base = np.append(base, dp_fwd_dt)
+        if self._n_ctrl_states > 0 and self.control is not None and _ctrl_fs is not None:
+            dxa = self.control.actuator_derivatives(_ctrl_fs, _ctrl_xa)
+            base = np.append(base, dxa)
         return base

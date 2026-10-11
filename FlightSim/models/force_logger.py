@@ -71,7 +71,8 @@ class ForceLogger:
         "FA_x", "FA_z",
         "FA_y_aero",       # siła boczna od CYβ
         "FA_y_magnus",     # siła Magnusa
-        "F_ctrl",          # siła sterowania (δ=0 na razie)
+        "F_ctrl",          # siła sterowania wzdłuż Z_body [N]
+        "F_ctrl_y",        # siła sterowania wzdłuż Y_body [N]
         "F_thrust",
         "Fg_x", "Fg_y", "Fg_z",
         "FX", "FY", "FZ",
@@ -80,7 +81,13 @@ class ForceLogger:
         "MA_roll_cant",    # moment toczący od zaklinowania
         "MA_roll_damp",    # tłumienie toczenia Clp
         "MA_roll",         # suma momentów toczących
-        "M_ctrl",          # moment sterowania (δ=0 na razie)
+        "M_ctrl",          # moment sterowania pitch [N·m]
+        "M_ctrl_roll",     # moment sterowania roll  [N·m]
+        "M_ctrl_yaw",      # moment sterowania yaw   [N·m]
+        # Zadane wychylenia powierzchni sterowych [deg]
+        "d_pitch_cmd", "d_yaw_cmd", "d_roll_cmd",
+        "d_pitch_act", "d_yaw_act", "d_roll_act",
+        "d_pitch_rate", "d_yaw_rate", "d_roll_rate",
         "M_thrust_pitch", "M_thrust_yaw",
         "MX", "MY", "MZ",
     ]
