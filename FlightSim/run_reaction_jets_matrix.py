@@ -28,6 +28,15 @@ TEST 2 — lot rzeczywisty (missions/mission_01.yaml, ciag, szyna 2 m, pelna
   S4  dublet: "w lewo", po 0.3 s "w prawo"
   S5  dwa przeciwlegle silniki naraz (R1E1 + R1E5) -> brak efektu
   S6  wszystkie 16 silnikow roll-aware "w lewo", co 0.5 s
+  S7  ponowne wywolanie zuzytego silnika (silnik na paliwo stale pali sie raz):
+      S7_ref  R1E1 raz (odniesienie)
+      S7a     R1E1, potem R1E1 ponownie po 0.5 s i 1.0 s
+      S7b     R1E1 dwa razy w tej samej komendzie
+      S7c     R1E1 ponownie W TRAKCIE pracy (po 5 ms)
+      S7d     roll-aware: 20 impulsow zadanych, 16 silnikow
+      Oczekiwane: kazde ponowne wywolanie odrzucone (rejected_spent), tor
+      identyczny jak S7_ref, impuls nie przedluzony; S7d odpala 16, a 4
+      niewykonane impulsy sa zalogowane.
 
 Wyniki: results/reaction_jets_matrix/  (CSV + wykresy PNG)
 
@@ -205,6 +214,7 @@ def run_case(case):
                                          "speed", "alpha", "beta")}
     out["status"] = res.status
     out["events"] = [dataclasses.asdict(e) for e in res.jet_events]
+    out["unfulfilled"] = list(getattr(getattr(jets, "commander", None), "unfulfilled", []))
     out["runtime"] = time.time() - t0
     out["name"] = case["name"]
     return out
@@ -282,6 +292,8 @@ def metrics_t2(r, r0, case):
     return {
         "case": case["name"], "group": case["group"],
         "n_fired": len(ev),
+        "n_rejected": sum(e["status"] == "rejected_spent" for e in r["events"]),
+        "n_unfulfilled": sum(u[2] for u in r.get("unfulfilled", [])),
         "engines": "+".join(e["engine"] for e in ev),
         "t_first_ign": round(ev[0]["t_ign"], 4) if ev else "",
         "impact_x_m": float(r["x"][i]), "impact_y_m": float(r["y"][i]),
@@ -452,6 +464,16 @@ def test2(jobs, quick):
                   "commander": sc([(T2_T_REF, ["R1E1", "R1E5"])])})
     cases.append({"name": "S6_all16_left", "group": "S6",
                   "commander": ra([(2.5, "left", 16, 0.5)])})
+    T = T2_T_REF
+    cases += [
+        {"name": "S7_ref", "group": "S7", "commander": sc([(T, "R1E1")])},
+        {"name": "S7a_refire_later", "group": "S7",
+         "commander": sc([(T, "R1E1"), (T + 0.5, "R1E1"), (T + 1.0, "R1E1")])},
+        {"name": "S7b_twice_same_cmd", "group": "S7", "commander": sc([(T, ["R1E1", "R1E1"])])},
+        {"name": "S7c_refire_burning", "group": "S7",
+         "commander": sc([(T, "R1E1"), (T + 0.005, "R1E1")])},
+        {"name": "S7d_ra_20_of_16", "group": "S7", "commander": ra([(T, "left", 20, 0.2)])},
+    ]
     for c in cases:
         c["test"] = "2"
 
@@ -471,11 +493,14 @@ def test2(jobs, quick):
               f"{row['d_downrange_m']:9.2f} {row['d_apogee_m']:8.2f} "
               f"{row['max_alpha_total_after_fire_deg']:9.2f}  {row['status']}{flag}")
 
+    refire_check(res, rows)
+
     # Wykresy
     fig, ax = plt.subplots(2, 2, figsize=(15, 11))
     fig.suptitle("Test 2: lot rzeczywisty 70mm (mission_01) — reaction jets vs lot bez sterowania",
                  fontweight="bold")
     groups = {"S3": "tab:blue", "S4": "tab:orange", "S5": "tab:grey", "S6": "tab:red"}
+    refire_plot(res, r0)
     a = ax[0, 0]
     for c in cases:
         if c["group"] in groups:
@@ -521,6 +546,84 @@ def test2(jobs, quick):
     savefig(fig, OUT_DIR / "test2_summary.png")
     plt.close(fig)
     return rows
+
+
+def refire_check(res, rows):
+    """S7: walidacja ponownego wywolania zuzytego silnika (PASS/FAIL)."""
+    by = {row["case"]: row for row in rows}
+    ref = by["S7_ref"]
+    ev = lambda nm: res[nm]["events"]
+    st = lambda nm: [e["status"] for e in ev(nm)]
+    same_track = lambda nm: (abs(by[nm]["impact_x_m"] - ref["impact_x_m"]) < 0.05 and
+                             abs(by[nm]["impact_y_m"] - ref["impact_y_m"]) < 0.05)
+    t_end_ref = ev("S7_ref")[0]["t_end"]
+    checks = [
+        ("S7a: pierwsze wywolanie odpala, 2 kolejne odrzucone",
+         st("S7a_refire_later") == ["fired", "rejected_spent", "rejected_spent"]),
+        ("S7a: punkt upadku jak S7_ref (< 5 cm)", same_track("S7a_refire_later")),
+        ("S7b: ten sam silnik 2x w jednej komendzie -> 1 odpalony, 1 odrzucony",
+         st("S7b_twice_same_cmd") == ["fired", "rejected_spent"]),
+        ("S7b: punkt upadku jak S7_ref (< 5 cm)", same_track("S7b_twice_same_cmd")),
+        ("S7c: wywolanie w trakcie pracy odrzucone",
+         st("S7c_refire_burning") == ["fired", "rejected_spent"]),
+        ("S7c: impuls nie przedluzony (ten sam t_end)",
+         abs(ev("S7c_refire_burning")[0]["t_end"] - t_end_ref) < 1e-12),
+        ("S7c: punkt upadku jak S7_ref (< 5 cm)", same_track("S7c_refire_burning")),
+        ("S7d: roll-aware odpala 16 roznych silnikow, 0 odrzuconych",
+         by["S7d_ra_20_of_16"]["n_fired"] == 16 and by["S7d_ra_20_of_16"]["n_rejected"] == 0
+         and len({e["engine"] for e in ev("S7d_ra_20_of_16")}) == 16),
+        ("S7d: 4 niewykonane impulsy zalogowane", by["S7d_ra_20_of_16"]["n_unfulfilled"] == 4),
+        ("S7d: lot zakonczony poprawnie", by["S7d_ra_20_of_16"]["status"] == "ok"),
+    ]
+    print("\n  S7 — ponowne wywolanie zuzytego silnika:")
+    for name, ok in checks:
+        print(f"    [{'PASS' if ok else 'FAIL'}] {name}")
+    for nm in ("S7a_refire_later", "S7b_twice_same_cmd", "S7c_refire_burning"):
+        print(f"      {nm}: " + ", ".join(f"{e['engine']}@{e['t_cmd']:.3f}s={e['status']}"
+                                          for e in ev(nm)))
+    return all(ok for _, ok in checks)
+
+
+def refire_plot(res, r0):
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(1, 2, figsize=(15, 5.5))
+    fig.suptitle("S7: ponowne wywolanie zuzytego silnika (R1E1)", fontweight="bold")
+    styles = {"S7_ref": ("k", "-", 3.0), "S7a_refire_later": ("tab:blue", "--", 1.5),
+              "S7b_twice_same_cmd": ("tab:orange", ":", 1.5),
+              "S7c_refire_burning": ("tab:green", "-.", 1.5)}
+    a = ax[0]
+    for nm, (c, ls, lw) in styles.items():
+        r = res[nm]
+        a.plot(r["t"], r["y"] - np.interp(r["t"], r0["t"], r0["y"]), color=c, ls=ls, lw=lw,
+               label=nm)
+    a.set_xlabel("t [s]"); a.set_ylabel("odchylenie boczne vs S0 [m]")
+    a.set_title("Tor: ponowne wywolania nie zmieniaja trajektorii (linie pokrywaja sie)")
+    a.legend(fontsize=8); a.grid(alpha=0.3)
+    a = ax[1]
+    names = list(styles) + ["S7d_ra_20_of_16"]
+    for k, nm in enumerate(names):
+        for e in res[nm]["events"]:
+            ok = e["status"] == "fired"
+            # Odrzucone lekko ponizej, zeby nie zaslanialy odpalen w tej samej chwili.
+            a.plot(e["t_cmd"], k if ok else k - 0.18, "^" if ok else "x",
+                   color="tab:green" if ok else "tab:red", ms=8 if ok else 10, mew=2)
+        n_u = sum(u[2] for u in res[nm].get("unfulfilled", []))
+        if n_u:
+            tu = res[nm]["unfulfilled"][0][0]
+            a.plot(tu, k, "o", mfc="none", color="tab:red", ms=10, mew=2)
+            a.annotate(f"{n_u} impulsy niewykonane\n(brak silnikow)", (tu, k),
+                       xytext=(-10, -28), textcoords="offset points", fontsize=8,
+                       color="tab:red", ha="right")
+    a.set_yticks(range(len(names))); a.set_yticklabels(names, fontsize=8)
+    a.set_ylim(-0.6, len(names) - 0.4)
+    a.plot([], [], "^", color="tab:green", label="odpalony")
+    a.plot([], [], "x", color="tab:red", label="odrzucony (zuzyty)")
+    a.plot([], [], "o", mfc="none", color="tab:red", label="zadanie zamkniete (brak silnikow)")
+    a.set_xlabel("chwila komendy [s]"); a.set_title("Log komend")
+    a.legend(fontsize=8, loc="lower right"); a.grid(alpha=0.3)
+    fig.tight_layout()
+    savefig(fig, OUT_DIR / "test2_refire.png")
+    plt.close(fig)
 
 
 # ============================================================================

@@ -242,6 +242,8 @@ class RollAwareJetCommander(JetCommander):
         self.lead_compensation = bool(lead_compensation)
         # Log decyzji: (t, engine, blad_kata_deg, request_index)
         self.decisions: List[Tuple[float, str, float, int]] = []
+        # Zadania przerwane z braku silnikow: (t, request_index, niewykonane impulsy)
+        self.unfulfilled: List[Tuple[float, int, int]] = []
         self.reset()
 
     def reset(self) -> None:
@@ -249,6 +251,7 @@ class RollAwareJetCommander(JetCommander):
         self._last = [-np.inf] * len(self.requests)
         self._wait = [None] * len(self.requests)
         self.decisions = []
+        self.unfulfilled = []
 
     def planned_times(self) -> Sequence[float]:
         return [r.t_start for r in self.requests]
@@ -296,7 +299,13 @@ class RollAwareJetCommander(JetCommander):
             if self._left[i] <= 0 or ctx.t + T_EPS < self._ready_at(i):
                 continue
             d = self.desired_body_direction(ctx, r.vector())
-            if d is None or not np.any(avail):
+            if not np.any(avail):
+                # Wszystkie silniki zuzyte: zadanie nie moze byc wykonane.
+                # Zamykamy je (i logujemy), zamiast tykac do konca lotu.
+                self.unfulfilled.append((ctx.t, i, self._left[i]))
+                self._left[i] = 0
+                continue
+            if d is None:
                 continue
             score = np.where(avail, lat @ d, -np.inf)
             k = int(np.argmax(score))

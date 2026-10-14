@@ -465,6 +465,20 @@ check("4 impulsy: wypadkowa w -Y_LF (< 6 deg)", ang < 6.0, f"({ang:.1f} deg)")
 check("roll-aware: ticki tylko gdy zadanie aktywne",
       cmd.next_tick_after(2.9, 500.0) == np.inf)
 
+# Wyczerpanie silnikow: 18 impulsow zadanych, 16 silnikow. Roll-aware nigdy
+# nie wybiera zuzytego silnika, a niewykonalne zadanie jest zamykane i
+# logowane — zamiast tykac 500 Hz do konca lotu.
+cmd = RollAwareJetCommander([JetPulseRequest(1.0, "left", n_pulses=18, min_interval_s=0.02)])
+rs = fly_spin(jets(rows=rows_cg, commander=cmd), 2000.0, t_max=3.0)
+st_ = [e.status for e in rs.jet_events]
+check("wyczerpanie: odpalono wszystkie 16 silnikow, kazdy raz",
+      st_.count("fired") == 16 and len({e.engine for e in rs.jet_events}) == 16)
+check("wyczerpanie: roll-aware nie komenderuje zuzytych silnikow", "rejected_spent" not in st_)
+check("wyczerpanie: zadanie zamkniete z 2 niewykonanymi impulsami",
+      len(cmd.unfulfilled) == 1 and cmd.unfulfilled[0][2] == 2, f"{cmd.unfulfilled}")
+check("wyczerpanie: po zamknieciu brak dalszych tickow",
+      cmd.next_tick_after(cmd.unfulfilled[0][0], 500.0) == np.inf)
+
 # Brak wirowania: zaden silnik nie trafia w tolerancje -> odpal najlepszy po max_wait.
 cmd = RollAwareJetCommander([JetPulseRequest(1.0, (0.0, 1.0, 0.1))], tolerance_deg=0.1,
                             max_wait_s=0.05)
