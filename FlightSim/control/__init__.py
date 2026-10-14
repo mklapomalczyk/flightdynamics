@@ -25,8 +25,9 @@ from .commander import Commander, ZeroCommander, StepCommander, ConstantCommande
 from .actuator import Actuator, PassthroughActuator, SecondOrderActuator
 from .effectors import (Effector, AeroSurfaceEffector, JetLayout, JetRow,
                         JetThrustProfile, ReactionJetEffector)
-from .jets import (JetCommander, JetEvent, JetTickContext, NoJetCommander,
-                   ReactionJetSystem, ScheduleJetCommander,
+from .jets import (JetCommander, JetEvent, JetPulseRequest, JetTickContext,
+                   LF_DIRECTIONS, NoJetCommander, ReactionJetSystem,
+                   RollAwareJetCommander, ScheduleJetCommander,
                    build_reaction_jet_system)
 from .derivatives import ControlDerivTable, PANEL_PATTERNS, fit_derivative_from_sweep
 from .system import ControlSystem, build_actuator_from_config
@@ -39,6 +40,7 @@ __all__ = [
     "JetLayout", "JetRow", "JetThrustProfile", "ReactionJetEffector",
     "JetCommander", "JetEvent", "JetTickContext", "NoJetCommander",
     "ReactionJetSystem", "ScheduleJetCommander", "build_reaction_jet_system",
+    "JetPulseRequest", "RollAwareJetCommander", "LF_DIRECTIONS",
     "ControlDerivTable", "PANEL_PATTERNS", "fit_derivative_from_sweep",
     "ControlSystem", "build_actuator_from_config",
 ]

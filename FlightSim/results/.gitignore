@@ -1,2 +1,5 @@
 *.png
 selected_engines.txt
+
+# Wyniki run_reaction_jets_matrix.py (generowane)
+reaction_jets_matrix/

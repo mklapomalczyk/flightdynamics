@@ -39,6 +39,16 @@ class ConstantGravity:
         return f"ConstantGravity(g={G0} m/s²)"
 
 
+class ZeroGravity:
+    """g = 0 — do testow syntetycznych (np. lot prostoliniowy bez grawitacji)."""
+
+    def g(self, h: float) -> float:
+        return 0.0
+
+    def __repr__(self) -> str:
+        return "ZeroGravity(g=0)"
+
+
 class SphericalGravity:
     """
     Grawitacja z korekcją wysokości: g(h) = G0 * (R/(R+h))².
@@ -76,6 +86,7 @@ def create_gravity(model: str = "constant") -> GravityModel:
         "constant"  → stałe g (domyślne)
         "spherical" → g(h) z poprawką wysokości
         "wgs84"     → zaślepka WGS84
+        "none"      → g = 0 (testy syntetyczne)
     """
     if model == "constant":
         return ConstantGravity()
@@ -83,5 +94,7 @@ def create_gravity(model: str = "constant") -> GravityModel:
         return SphericalGravity()
     elif model == "wgs84":
         return WGS84Gravity()
+    elif model == "none":
+        return ZeroGravity()
     else:
         raise ValueError(f"Nieznany model grawitacji: '{model}'.")

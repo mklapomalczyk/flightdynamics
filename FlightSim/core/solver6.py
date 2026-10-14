@@ -235,12 +235,16 @@ def _integrate_segmented(fun, x0, t_max, t_eval, events, system,
     planned = sorted({float(p) for p in system.commander.planned_times()
                       if 0.0 <= float(p) < t_max})
 
+    grid = getattr(system.commander, "next_tick_after", None)
+
     def next_tick_after(t):
         cands = [p for p in planned if p > t + eps]
         nt = cands[0] if cands else np.inf
         if rate:
-            k = np.floor(t * rate + eps) + 1.0
-            nt = min(nt, k / rate)
+            # Sterownik moze pominac ticki, gdy nic nie robi (np. czeka na
+            # t_start) — wtedy nie dzielimy calego lotu na segmenty 1/rate.
+            nt = min(nt, grid(t, rate) if grid is not None
+                     else (np.floor(t * rate + eps) + 1.0) / rate)
         return nt
 
     t = 0.0

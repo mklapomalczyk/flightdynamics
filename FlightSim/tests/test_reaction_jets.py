@@ -412,6 +412,73 @@ for mod, why in [(lambda d: d.update(control_type="rcs"), "nieznany control_type
     except ValueError:
         check(f"YAML: odrzuca ({why})", True)
 
+# --- 10. Sterownik wg kata przechylenia (RollAwareJetCommander) -------------
+print("\n10. RollAwareJetCommander — kierunek w ukladzie startowym przy wirowaniu")
+import dataclasses
+from control import JetPulseRequest, RollAwareJetCommander
+
+
+def fly_spin(control, p0_deg_s, t_max=2.0):
+    st = dataclasses.replace(State6DOF.initial(elevation_deg=80.0, speed_0=200.0),
+                             p=np.radians(p0_deg_s))
+    return run_simulation_6dof(build_model(control), st, t_max=t_max,
+                               dt_output=0.01, z_ground=-1e9)
+
+
+def dv_angle_from(res, r0, target):
+    """Kat [deg] miedzy zmiana predkosci (LF) a kierunkiem zadanym."""
+    i = len(res.t) - 1
+    dv = v_launch(res, i) - v_launch(r0, i)
+    c = float(np.dot(dv, target) / np.linalg.norm(dv))
+    return float(np.degrees(np.arccos(np.clip(c, -1.0, 1.0)))), float(np.linalg.norm(dv))
+
+
+rows_cg = [JetRow(XCG, 8, 0.0), JetRow(XCG, 8, 22.5)]     # w SC: czysty dv, bez obrotu
+for p0 in (0.0, 2000.0, -2000.0):
+    r0s = fly_spin(None, p0)
+    cmd = RollAwareJetCommander([JetPulseRequest(1.0, "right")])
+    rs = fly_spin(jets(rows=rows_cg, delay=0.005, commander=cmd), p0)
+    ang, dv = dv_angle_from(rs, r0s, np.array([0.0, 1.0, 0.0]))
+    sel = cmd.decisions[0][2]
+    check(f"p={p0:+.0f} deg/s: impuls w +Y_LF (blad {ang:.1f} deg <= blad wyboru + 1 deg)",
+          ang <= sel + 1.0, f"(wybor {sel:.1f} deg)")
+    check(f"p={p0:+.0f} deg/s: blad wyboru <= tolerancja", sel <= 15.0)
+    if p0 != 0.0:
+        cmd_nl = RollAwareJetCommander([JetPulseRequest(1.0, "right")], lead_compensation=False)
+        rn = fly_spin(jets(rows=rows_cg, delay=0.005, commander=cmd_nl), p0)
+        ang_nl, _ = dv_angle_from(rn, r0s, np.array([0.0, 1.0, 0.0]))
+        check(f"p={p0:+.0f} deg/s: kompensacja obrotu poprawia kierunek ({ang:.1f} < {ang_nl:.1f} deg)",
+              ang < ang_nl - 5.0)
+
+# Kilka impulsow w odstepach, kazdy innym silnikiem, wszystkie w tym samym kierunku.
+r0s = fly_spin(None, 2000.0, t_max=3.0)
+cmd = RollAwareJetCommander([JetPulseRequest(1.0, "left", n_pulses=4, min_interval_s=0.2)])
+rs = fly_spin(jets(rows=rows_cg, delay=0.005, commander=cmd), 2000.0, t_max=3.0)
+fired = [e for e in rs.jet_events if e.status == "fired"]
+ang, dv = dv_angle_from(rs, r0s, np.array([0.0, -1.0, 0.0]))
+check("4 impulsy: 4 rozne silniki", len({e.engine for e in fired}) == 4)
+check("4 impulsy: odstep >= min_interval",
+      np.all(np.diff([e.t_cmd for e in fired]) >= 0.2 - 1e-9))
+check("4 impulsy: dv ~ 4 * I/m (kierunki zgodne)", rel_err(dv, 4.0 / M_ROCKET) < 0.02,
+      f"{dv:.4f} vs {4.0 / M_ROCKET:.4f}")
+check("4 impulsy: wypadkowa w -Y_LF (< 6 deg)", ang < 6.0, f"({ang:.1f} deg)")
+check("roll-aware: ticki tylko gdy zadanie aktywne",
+      cmd.next_tick_after(2.9, 500.0) == np.inf)
+
+# Brak wirowania: zaden silnik nie trafia w tolerancje -> odpal najlepszy po max_wait.
+cmd = RollAwareJetCommander([JetPulseRequest(1.0, (0.0, 1.0, 0.1))], tolerance_deg=0.1,
+                            max_wait_s=0.05)
+fly_spin(jets(rows=rows_cg, commander=cmd), 0.0)
+check("bez wirowania: odpala najlepszy silnik po max_wait",
+      len(cmd.decisions) == 1 and abs(cmd.decisions[0][0] - 1.05) < 1e-6,
+      f"{cmd.decisions}")
+for bad in ["sideways", (0.0, 0.0, 0.0)]:
+    try:
+        RollAwareJetCommander([JetPulseRequest(1.0, bad)])
+        check(f"roll-aware: odrzuca kierunek {bad!r}", False)
+    except ValueError:
+        check(f"roll-aware: odrzuca kierunek {bad!r}", True)
+
 # --------------------------------------------------------------------------
 print("\n" + "=" * 66)
 print(f"  Wynik: {PASS}/{PASS + FAIL} testow zaliczonych")

@@ -73,6 +73,11 @@ class JetTickContext:
     x:       np.ndarray            # wektor stanu solvera (kopia)
     t_ign:   Tuple[float, ...]     # czasy zaplonu wszystkich silnikow (inf = nieodpalony)
     names:   Tuple[str, ...]       # nazwy silnikow ("R1E1", ...)
+    # Geometria i czasy silnikow — dla sterownikow, ktore wybieraja silnik
+    # wg kierunku (RollAwareJetCommander). None/0 w testach jednostkowych.
+    layout:         Optional[JetLayout] = None
+    burn_time:      float = 0.0
+    ignition_delay: float = 0.0
 
     def is_fired(self, engine: EngineRef) -> bool:
         i = engine if isinstance(engine, (int, np.integer)) else self.names.index(str(engine).upper())
@@ -107,6 +112,14 @@ class JetCommander(ABC):
 
     def reset(self) -> None:
         """Wywolywane na poczatku kazdej symulacji (dla sterownikow z pamiecia)."""
+
+    def next_tick_after(self, t: float, rate_hz: float) -> float:
+        """
+        Nastepny regularny tick po t (siatka k / rate_hz). Sterownik, ktory
+        przez wiekszosc lotu nic nie robi, moze zwrocic inf, zeby solver nie
+        dzielil calego lotu na segmenty co 1/rate_hz.
+        """
+        return (np.floor(t * rate_hz + T_EPS) + 1.0) / rate_hz
 
     @abstractmethod
     def decide(self, ctx: JetTickContext) -> Sequence[EngineRef]:
@@ -148,6 +161,158 @@ class ScheduleJetCommander(JetCommander):
         for t, engines in self.schedule:
             if ctx.t_prev + T_EPS < t <= ctx.t + T_EPS:
                 out.extend(engines)
+        return out
+
+
+# Kierunki nazwane w ukladzie startowym (Launch Frame: X wzdluz azymutu,
+# Y w prawo, Z w dol).
+LF_DIRECTIONS = {
+    "left":  (0.0, -1.0, 0.0),
+    "right": (0.0, +1.0, 0.0),
+    "up":    (0.0, 0.0, -1.0),
+    "down":  (0.0, 0.0, +1.0),
+}
+
+
+@dataclass(frozen=True)
+class JetPulseRequest:
+    """
+    Zadanie "pchnij w kierunku d_LF": n_pulses impulsow, nie czesciej niz co
+    min_interval_s, poczawszy od t_start.
+
+    direction: nazwa z LF_DIRECTIONS albo wektor (3,) w ukladzie startowym.
+    Liczy sie tylko skladowa PROSTOPADLA do osi rakiety (silniki dzialaja
+    poprzecznie), wiec np. "up" przy elewacji 45 deg oznacza "w gore,
+    prostopadle do osi".
+    """
+    t_start:        float
+    direction:      Union[str, Tuple[float, float, float]]
+    n_pulses:       int = 1
+    min_interval_s: float = 0.0
+
+    def vector(self) -> np.ndarray:
+        d = LF_DIRECTIONS.get(self.direction) if isinstance(self.direction, str) \
+            else self.direction
+        if d is None:
+            raise ValueError(f"nieznany kierunek {self.direction!r} "
+                             f"(dozwolone: {', '.join(LF_DIRECTIONS)} albo wektor 3D)")
+        v = np.asarray(d, dtype=float)
+        n = np.linalg.norm(v)
+        if v.shape != (3,) or n == 0.0:
+            raise ValueError(f"kierunek musi byc niezerowym wektorem 3D: {d!r}")
+        return v / n
+
+
+class RollAwareJetCommander(JetCommander):
+    """
+    Wybiera silnik wg AKTUALNEGO kata przechylenia, tak by impuls dzialal w
+    zadanym kierunku w ukladzie startowym.
+
+    Po co: rakieta z zaklinowanymi pletwami wiruje (model 70mm: do ~2400
+    deg/s). Silnik przymocowany do korpusu pcha wiec w kierunku zaleznym od
+    chwili odpalenia — "odpal R1E1" daje w praktyce losowy kierunek.
+
+    W kazdym ticku, dla kazdego aktywnego zadania:
+      1. kierunek zadany d_LF -> uklad ciala (DCM z kwaterniona), skladowa
+         poprzeczna (y, z),
+      2. kompensacja obrotu w czasie opoznienia zaplonu i polowy impulsu:
+         korpus obroci sie o p * (delay + burn/2), wiec kierunek zadany
+         "widziany z korpusu" obraca sie o ten kat w przeciwna strone,
+      3. wybor dostepnego (nieodpalonego) silnika o kierunku sily
+         najblizszym zadanemu; odpal, jesli blad <= tolerance_deg,
+         albo jesli czekamy juz dluzej niz max_wait_s (rakieta nie wiruje).
+
+    Sterownik ma pamiec (pozostale impulsy, czas ostatniego), ale jest
+    wolany tylko w tickach, monotonicznie — patrz JetCommander.
+    """
+
+    def __init__(self, requests: Sequence[JetPulseRequest],
+                 rate_hz: Optional[float] = 500.0,
+                 tolerance_deg: float = 15.0,
+                 max_wait_s: Optional[float] = 0.1,
+                 lead_compensation: bool = True):
+        self.requests = sorted(requests, key=lambda r: r.t_start)
+        for r in self.requests:
+            r.vector()                                  # walidacja kierunku
+            if r.n_pulses < 1:
+                raise ValueError("n_pulses musi byc >= 1")
+        self.rate_hz = rate_hz
+        self.tolerance_deg = float(tolerance_deg)
+        self.max_wait_s = max_wait_s
+        self.lead_compensation = bool(lead_compensation)
+        # Log decyzji: (t, engine, blad_kata_deg, request_index)
+        self.decisions: List[Tuple[float, str, float, int]] = []
+        self.reset()
+
+    def reset(self) -> None:
+        self._left = [r.n_pulses for r in self.requests]
+        self._last = [-np.inf] * len(self.requests)
+        self._wait = [None] * len(self.requests)
+        self.decisions = []
+
+    def planned_times(self) -> Sequence[float]:
+        return [r.t_start for r in self.requests]
+
+    def _ready_at(self, i: int) -> float:
+        r = self.requests[i]
+        return max(r.t_start, self._last[i] + r.min_interval_s)
+
+    def next_tick_after(self, t: float, rate_hz: float) -> float:
+        nxt = np.inf
+        for i, left in enumerate(self._left):
+            if left <= 0:
+                continue
+            ready = self._ready_at(i)
+            if ready > t + T_EPS:
+                nxt = min(nxt, ready)                    # przerwa: skok do gotowosci
+            else:
+                nxt = min(nxt, super().next_tick_after(t, rate_hz))
+        return nxt
+
+    def desired_body_direction(self, ctx: JetTickContext, d_lf: np.ndarray) -> Optional[np.ndarray]:
+        """Zadany kierunek w ukladzie ciala, poprzeczny, z kompensacja obrotu."""
+        from core.quaternion import quat_norm, quat_to_dcm
+        dcm = quat_to_dcm(quat_norm(np.asarray(ctx.x[6:10], dtype=float)))
+        d = dcm @ d_lf
+        y, z = float(d[1]), float(d[2])
+        n = np.hypot(y, z)
+        if n < 1e-6:
+            return None                                  # kierunek wzdluz osi
+        y, z = y / n, z / n
+        if self.lead_compensation:
+            th = -float(ctx.x[10]) * (ctx.ignition_delay + 0.5 * ctx.burn_time)
+            c, s = np.cos(th), np.sin(th)
+            y, z = y * c - z * s, y * s + z * c
+        return np.array([y, z])
+
+    def decide(self, ctx: JetTickContext) -> Sequence[EngineRef]:
+        if ctx.layout is None:
+            raise ValueError("RollAwareJetCommander wymaga geometrii silnikow w kontekscie")
+        lat = ctx.layout.direction[:, 1:]
+        lat = lat / np.linalg.norm(lat, axis=1, keepdims=True)
+        avail = np.array([not np.isfinite(ti) for ti in ctx.t_ign])
+        out: List[str] = []
+        for i, r in enumerate(self.requests):
+            if self._left[i] <= 0 or ctx.t + T_EPS < self._ready_at(i):
+                continue
+            d = self.desired_body_direction(ctx, r.vector())
+            if d is None or not np.any(avail):
+                continue
+            score = np.where(avail, lat @ d, -np.inf)
+            k = int(np.argmax(score))
+            err = float(np.degrees(np.arccos(np.clip(score[k], -1.0, 1.0))))
+            if self._wait[i] is None:
+                self._wait[i] = ctx.t
+            waited = ctx.t - self._wait[i]
+            if err <= self.tolerance_deg or (self.max_wait_s is not None
+                                            and waited >= self.max_wait_s - T_EPS):
+                name = ctx.layout.names[k]
+                out.append(name)
+                avail[k] = False
+                self._left[i] -= 1
+                self._last[i] = ctx.t
+                self._wait[i] = None
+                self.decisions.append((ctx.t, name, err, i))
         return out
 
 
@@ -252,7 +417,10 @@ class ReactionJetSystem:
         ctx = JetTickContext(t=float(t), t_prev=float(t_prev),
                              x=np.array(x, dtype=float, copy=True),
                              t_ign=tuple(self._t_ign.tolist()),
-                             names=self.layout.names)
+                             names=self.layout.names,
+                             layout=self.layout,
+                             burn_time=self.profile.burn_time,
+                             ignition_delay=self.ignition_delay)
         engines = list(self.commander.decide(ctx) or ())
         return self.fire(engines, t) if engines else []
 
