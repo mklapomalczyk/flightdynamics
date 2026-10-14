@@ -37,6 +37,15 @@ TEST 2 — lot rzeczywisty (missions/mission_01.yaml, ciag, szyna 2 m, pelna
       Oczekiwane: kazde ponowne wywolanie odrzucone (rejected_spent), tor
       identyczny jak S7_ref, impuls nie przedluzony; S7d odpala 16, a 4
       niewykonane impulsy sa zalogowane.
+  S8  opcje silnika z YAML i szyna — na locie rzeczywistym (dotad tylko
+      w modelu prozniowym):
+      S8a     opoznienie zaplonu 50 ms (vs komenda 50 ms pozniej bez opoznienia)
+      S8b     roll-aware z opoznieniem 50 ms (~100 deg obrotu): z kompensacja
+              i bez — vs roll-aware bez opoznienia
+      S8c     profil ciagu nieprostokatny (ten sam impuls) vs prostokatny
+      S8d     pochylenie obwodowe 10 deg -> skok predkosci roll
+      S8e     pochylenie osiowe 20 deg -> skok predkosci osiowej, mniejszy efekt boczny
+      S8f     odpalenie na szynie -> impuls poprzeczny przejety przez szyne
 
 Wyniki: results/reaction_jets_matrix/  (CSV + wykresy PNG)
 
@@ -75,6 +84,12 @@ T1_T_FIRE, T1_T_END = 1.0, 4.0    # chwila impulsu i koniec przebiegu [s]
 # Test 2
 T2_T_REF = 3.0                    # chwila odniesienia dla S2..S5 [s]
 ROLL_RATE_HZ = 500.0              # ticki sterownika roll-aware [Hz]
+# S8 — opcje silnika
+S8_DELAY = 0.05                   # opoznienie zaplonu [s]
+S8_PROFILE = [[0.0, 0.0], [0.2, 1.5], [0.7, 1.0], [1.0, 0.0]]
+S8_TILT_TAN = 10.0                # [deg]
+S8_TILT_AX = 20.0                 # [deg]
+S8_T_RAIL = 0.05                  # komenda na szynie (zejscie ~0.17 s) [s]
 
 
 # ============================================================================
@@ -124,16 +139,23 @@ def make_commander(spec):
         return ScheduleJetCommander(spec["schedule"])
     if kind == "roll_aware":
         reqs = [JetPulseRequest(t, d, n, dt) for (t, d, n, dt) in spec["requests"]]
-        return RollAwareJetCommander(reqs, rate_hz=ROLL_RATE_HZ)
+        return RollAwareJetCommander(reqs, rate_hz=ROLL_RATE_HZ,
+                                     lead_compensation=spec.get("lead", True))
     raise ValueError(kind)
 
 
-def make_jets(spec):
+def make_jets(spec, engine_override=None):
+    """engine_override: zmiany parametrow silnika wzgledem YAML (np. ignition_delay)."""
     from control import build_reaction_jet_system
     cmd = make_commander(spec)
     if cmd is None:
         return None
-    return build_reaction_jet_system(load_cfg(), commander=cmd)
+    cfg = load_cfg()
+    if engine_override:
+        rj = dataclasses.replace(cfg.reaction_jets, engine=dataclasses.replace(
+            cfg.reaction_jets.engine, **engine_override))
+        cfg = dataclasses.replace(cfg, reaction_jets=rj)
+    return build_reaction_jet_system(cfg, commander=cmd)
 
 
 def synthetic_model(variant, control):
@@ -196,7 +218,7 @@ def run_case(case):
     from core.solver6 import run_simulation_6dof
     from core.state6 import State6DOF
     t0 = time.time()
-    jets = make_jets(case.get("commander"))
+    jets = make_jets(case.get("commander"), case.get("engine"))
     if case["test"] in ("1a", "1b"):
         st = dataclasses.replace(
             State6DOF.initial(elevation_deg=0.0, speed_0=case.get("V", T1_V)),
@@ -288,7 +310,9 @@ def metrics_t1(r, r0, case, mass, Iyy, xcg):
 def metrics_t2(r, r0, case):
     i, i0 = len(r["t"]) - 1, len(r0["t"]) - 1
     ev = fired(r)
-    a_tot = after_first_fire(r, alpha_total_deg(r))
+    # Bez odpalen kat natarcia "po odpaleniu" nie ma sensu (cale okno lotu
+    # zawiera start z V=0, gdzie alpha_total = 90 deg).
+    a_tot = after_first_fire(r, alpha_total_deg(r)) if ev else np.zeros(0)
     return {
         "case": case["name"], "group": case["group"],
         "n_fired": len(ev),
@@ -304,8 +328,8 @@ def metrics_t2(r, r0, case):
         "flight_time_s": float(r["t"][i]),
         "max_alpha_total_after_fire_deg": float(np.max(a_tot)) if a_tot.size else 0.0,
         "alpha_gt_10deg": bool(a_tot.size and np.max(a_tot) > 10.0),
-        "max_q_dps": float(np.max(np.abs(np.degrees(after_first_fire(r, r["qr"]))))),
-        "max_r_dps": float(np.max(np.abs(np.degrees(after_first_fire(r, r["r"]))))),
+        "max_q_dps": float(np.max(np.abs(np.degrees(after_first_fire(r, r["qr"]))))) if ev else 0.0,
+        "max_r_dps": float(np.max(np.abs(np.degrees(after_first_fire(r, r["r"]))))) if ev else 0.0,
         "status": r["status"], "runtime_s": round(r["runtime"], 1),
     }
 
@@ -474,6 +498,28 @@ def test2(jobs, quick):
          "commander": sc([(T, "R1E1"), (T + 0.005, "R1E1")])},
         {"name": "S7d_ra_20_of_16", "group": "S7", "commander": ra([(T, "left", 20, 0.2)])},
     ]
+    D = S8_DELAY
+    cases += [
+        {"name": "S8a_delay", "group": "S8", "commander": sc([(T, "R1E1")]),
+         "engine": {"ignition_delay": D}},
+        {"name": "S8a_ref", "group": "S8", "commander": sc([(T + D, "R1E1")])},
+        {"name": "S8b_ref_ra", "group": "S8", "commander": ra([(T, "left", 1, 0.0)])},
+        {"name": "S8b_ra_delay", "group": "S8", "commander": ra([(T, "left", 1, 0.0)]),
+         "engine": {"ignition_delay": D}},
+        {"name": "S8b_ra_delay_nolead", "group": "S8",
+         "commander": dict(ra([(T, "left", 1, 0.0)]), lead=False),
+         "engine": {"ignition_delay": D}},
+        {"name": "S8c_profile", "group": "S8", "commander": sc([(T, "R1E1")]),
+         "engine": {"profile": S8_PROFILE}},
+        {"name": "S8d_tilt_tan", "group": "S8", "commander": sc([(T, "R1E1")]),
+         "engine": {"tilt_tangential_deg": S8_TILT_TAN}},
+        {"name": "S8e_tilt_ax", "group": "S8", "commander": sc([(T, "R1E1")]),
+         "engine": {"tilt_axial_deg": S8_TILT_AX}},
+        {"name": "S8f_on_rail", "group": "S8", "commander": sc([(S8_T_RAIL, "R1E1")])},
+        # S0 przez solver segmentowy (bez odpalen): poziom szumu numerycznego
+        # wzgledem S0 liczonego jednym wywolaniem solve_ivp.
+        {"name": "S0_seg", "group": "S0", "commander": {"kind": "none"}},
+    ]
     for c in cases:
         c["test"] = "2"
 
@@ -494,6 +540,7 @@ def test2(jobs, quick):
               f"{row['max_alpha_total_after_fire_deg']:9.2f}  {row['status']}{flag}")
 
     refire_check(res, rows)
+    options_check(res, rows, r0)
 
     # Wykresy
     fig, ax = plt.subplots(2, 2, figsize=(15, 11))
@@ -501,6 +548,7 @@ def test2(jobs, quick):
                  fontweight="bold")
     groups = {"S3": "tab:blue", "S4": "tab:orange", "S5": "tab:grey", "S6": "tab:red"}
     refire_plot(res, r0)
+    options_plot(res, r0)
     a = ax[0, 0]
     for c in cases:
         if c["group"] in groups:
@@ -623,6 +671,141 @@ def refire_plot(res, r0):
     a.legend(fontsize=8, loc="lower right"); a.grid(alpha=0.3)
     fig.tight_layout()
     savefig(fig, OUT_DIR / "test2_refire.png")
+    plt.close(fig)
+
+
+def _at(r, t):
+    return int(np.argmin(np.abs(r["t"] - t)))
+
+
+def options_check(res, rows, r0):
+    """S8: opcje silnika z YAML na locie rzeczywistym (PASS/FAIL)."""
+    cfg = load_cfg()
+    eng, e = cfg.reaction_jets.engine, cfg.mass_model.empty
+    I = eng.thrust * eng.burn_time
+    R = cfg.reaction_jets.radius or 0.5 * cfg.body.diameter
+    by = {row["case"]: row for row in rows}
+    ev = lambda nm: [x for x in res[nm]["events"] if x["status"] == "fired"]
+    imp = lambda nm: np.array([by[nm]["d_crossrange_m"], by[nm]["d_downrange_m"]])
+    T = T2_T_REF
+    out = []
+
+    # S8a: opoznienie — zaplon przesuniety, tor jak przy komendzie o D pozniej.
+    ra, rr = res["S8a_delay"], res["S8a_ref"]
+    t_ign = ev("S8a_delay")[0]["t_ign"]
+    pre = ra["t"] < t_ign - 1e-9
+    dev_pre = float(np.max(np.abs(ra["y"][pre] - np.interp(ra["t"][pre], r0["t"], r0["y"]))))
+    out += [("S8a: zaplon = komenda + 50 ms", abs(t_ign - (T + S8_DELAY)) < 1e-12),
+            (f"S8a: brak reakcji przed zaplonem (max |dy| = {dev_pre:.1e} m)", dev_pre < 1e-4),
+            ("S8a: punkt upadku jak komenda 50 ms pozniej bez opoznienia (< 5 cm)",
+             np.linalg.norm(imp("S8a_delay") - imp("S8a_ref")) < 0.05)]
+
+    # S8b: roll-aware musi wyprzedzic obrot o p * (delay + burn/2).
+    c_ref = by["S8b_ref_ra"]["d_crossrange_m"]
+    c_d, c_nl = by["S8b_ra_delay"]["d_crossrange_m"], by["S8b_ra_delay_nolead"]["d_crossrange_m"]
+    p_T = abs(np.degrees(r0["p"][_at(r0, T)]))
+    lead = p_T * (S8_DELAY + eng.burn_time / 2)
+    out += [(f"S8b: z kompensacja (wyprzedzenie ~{lead:.0f} deg) efekt w lewo jak bez "
+             f"opoznienia ({c_d:.1f} vs {c_ref:.1f} m, < 15%)",
+             c_d < 0 and abs(c_d / c_ref - 1) < 0.15),
+            (f"S8b: bez kompensacji kierunek chybiony ({c_nl:.1f} m, < 50% efektu)",
+             abs(c_nl) < 0.5 * abs(c_ref) or c_nl > 0)]
+
+    # S8c: inny ksztalt, ten sam impuls -> zblizony efekt (rozni sie tylko
+    # chwila "srodka ciezkosci" impulsu, a rakieta wiruje).
+    d_c, d_r = imp("S8c_profile"), imp("S7_ref")
+    out += [("S8c: profil — zaplon i koniec jak prostokatny",
+             abs(ev("S8c_profile")[0]["t_end"] - ev("S7_ref")[0]["t_end"]) < 1e-12),
+            (f"S8c: profil — przesuniecie upadku jak prostokatny "
+             f"(|roznica| {np.linalg.norm(d_c - d_r):.2f} m < 25% z {np.linalg.norm(d_r):.2f} m)",
+             np.linalg.norm(d_c - d_r) < 0.25 * np.linalg.norm(d_r))]
+
+    # S8d: pochylenie obwodowe -> dp = R I sin(t) / Ixx; tlumienie roll (Clp)
+    # zjada czesc juz w trakcie 10 ms impulsu, stad dolna granica 85%.
+    t_end = ev("S8d_tilt_tan")[0]["t_end"]
+    k, k0 = _at(res["S8d_tilt_tan"], t_end), _at(res["S7_ref"], t_end)
+    dp = np.degrees(res["S8d_tilt_tan"]["p"][k] - res["S7_ref"]["p"][k0])
+    dp_exp = np.degrees(R * I * np.sin(np.radians(S8_TILT_TAN)) / e.Ixx)
+    out += [(f"S8d: skok roll dp = {dp:.1f} deg/s (oczekiwane {dp_exp:.1f}, 85-102%)",
+             0.85 <= dp / dp_exp <= 1.02)]
+
+    # S8e: pochylenie osiowe -> du = I sin(a)/m. Moment pochylajacy:
+    # My = arm*T*cos(a) + R*T*sin(a) (skladowa osiowa dziala na promieniu R),
+    # wiec efekt boczny skaluje sie jak cos(a) + (R/arm)*sin(a). Porownujemy
+    # tylko cross-range — down-range rosnie dodatkowo od du.
+    k, k0 = _at(res["S8e_tilt_ax"], t_end), _at(res["S7_ref"], t_end)
+    du = res["S8e_tilt_ax"]["speed"][k] - res["S7_ref"]["speed"][k0]
+    du_exp = I * np.sin(np.radians(S8_TILT_AX)) / e.mass
+    a = np.radians(S8_TILT_AX)
+    arm = e.xcg - cfg.reaction_jets.rows[0].x
+    lat_exp = np.cos(a) + (R / arm) * np.sin(a)
+    lat = by["S8e_tilt_ax"]["d_crossrange_m"] / by["S7_ref"]["d_crossrange_m"]
+    out += [(f"S8e: skok predkosci du = {du:.4f} m/s (oczekiwane {du_exp:.4f}, +/-10%)",
+             abs(du / du_exp - 1) < 0.10),
+            (f"S8e: efekt boczny (cross-range) x{lat:.3f} (oczekiwane cos a + R/arm sin a "
+             f"= {lat_exp:.3f}, +/-0.03)", abs(lat - lat_exp) < 0.03),
+            ("S8e: skladowa osiowa wydluza zasieg (d_down > S7_ref)",
+             by["S8e_tilt_ax"]["d_downrange_m"] > by["S7_ref"]["d_downrange_m"])]
+
+    # S8f: na szynie poprzeczny impuls przejmuje szyna -> tor jak S0. Odniesienie
+    # S0_seg (ten sam solver segmentowy), bo S0 liczony jednym solve_ivp rozni
+    # sie o szum numeryczny (wypisany ponizej).
+    e_f = ev("S8f_on_rail")
+    noise = np.linalg.norm(imp("S0_seg"))
+    out += [("S8f: silnik odpalony na szynie (log)", len(e_f) == 1 and e_f[0]["t_end"] < 0.17),
+            (f"S8f: tor jak bez odpalenia (szyna przejmuje impuls, vs S0_seg < 5 cm)",
+             np.linalg.norm(imp("S8f_on_rail") - imp("S0_seg")) < 0.05)]
+    print(f"\n  Szum numeryczny: S0 segmentowo vs jednym solve_ivp — upadek rozni sie o "
+          f"{noise * 100:.1f} cm (z {by['S0_seg']['impact_x_m'] / 1000:.2f} km)")
+
+    print("\n  S8 — opcje silnika z YAML na locie rzeczywistym:")
+    for name, ok in out:
+        print(f"    [{'PASS' if ok else 'FAIL'}] {name}")
+    return all(ok for _, ok in out)
+
+
+def options_plot(res, r0):
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(2, 2, figsize=(15, 10))
+    fig.suptitle("S8: opcje silnika z YAML na locie rzeczywistym", fontweight="bold")
+    dy = lambda nm: res[nm]["y"] - np.interp(res[nm]["t"], r0["t"], r0["y"])
+    T = T2_T_REF
+
+    a = ax[0, 0]
+    for nm, c, ls in (("S7_ref", "k", "-"), ("S8a_delay", "tab:blue", "--"),
+                      ("S8a_ref", "tab:orange", ":"), ("S8c_profile", "tab:green", "-."),
+                      ("S8f_on_rail", "tab:red", "-")):
+        a.plot(res[nm]["t"], dy(nm), color=c, ls=ls, label=nm)
+    a.set_xlabel("t [s]"); a.set_ylabel("odchylenie boczne vs S0 [m]")
+    a.set_title("Opoznienie (S8a), profil (S8c), szyna (S8f)")
+    a.legend(fontsize=8); a.grid(alpha=0.3)
+
+    a = ax[0, 1]
+    for nm, c in (("S8b_ref_ra", "k"), ("S8b_ra_delay", "tab:blue"),
+                  ("S8b_ra_delay_nolead", "tab:red")):
+        a.plot(res[nm]["t"], dy(nm), color=c, label=nm)
+    a.set_xlabel("t [s]"); a.set_ylabel("odchylenie boczne vs S0 [m]")
+    a.set_title(f"Roll-aware z opoznieniem {S8_DELAY * 1e3:.0f} ms: kompensacja obrotu")
+    a.legend(fontsize=8); a.grid(alpha=0.3)
+
+    win = lambda r: (r["t"] >= T - 0.02) & (r["t"] <= T + 0.08)
+    a = ax[1, 0]
+    for nm, c in (("S7_ref", "k"), ("S8d_tilt_tan", "tab:purple")):
+        r = res[nm]; m = win(r)
+        a.plot(r["t"][m], np.degrees(r["p"][m]), "o-", ms=3, color=c, label=nm)
+    a.set_xlabel("t [s]"); a.set_ylabel("p [deg/s]")
+    a.set_title(f"Pochylenie obwodowe {S8_TILT_TAN:.0f} deg: skok predkosci roll")
+    a.legend(fontsize=8); a.grid(alpha=0.3)
+
+    a = ax[1, 1]
+    for nm, c in (("S7_ref", "k"), ("S8e_tilt_ax", "tab:brown")):
+        r = res[nm]; m = win(r)
+        a.plot(r["t"][m], r["speed"][m], "o-", ms=3, color=c, label=nm)
+    a.set_xlabel("t [s]"); a.set_ylabel("V [m/s]")
+    a.set_title(f"Pochylenie osiowe {S8_TILT_AX:.0f} deg: skok predkosci")
+    a.legend(fontsize=8); a.grid(alpha=0.3)
+    fig.tight_layout()
+    savefig(fig, OUT_DIR / "test2_options.png")
     plt.close(fig)
 
 
