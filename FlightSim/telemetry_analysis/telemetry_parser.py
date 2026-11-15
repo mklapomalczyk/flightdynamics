@@ -9,9 +9,17 @@ Kodowanie moze byc cp1250/utf-8 — czytamy z errors='replace'.
 """
 
 import csv
+import re
 import numpy as np
 from pathlib import Path
 from dataclasses import dataclass
+
+
+# Znacznik w pierwszej linii pliku zbiorczego (nowy format, loty 22+).
+# Pliki z tym znacznikiem sa juz w poprawnej orientacji fizycznej —
+# parser NIE stosuje do nich korekt SWAP_GYRO_YZ ani zamiany lat/lon.
+# Zob. aggregate_flight_data.py.
+AGG_FORMAT_MARKER = "# FORMAT: ARTEMIDA_AGG v1"
 
 
 def get_data_dir():
@@ -29,13 +37,28 @@ def get_data_dir():
 
 
 def resolve_data_file(name):
-    """Znajduje plik danych — najpierw w biezacym katalogu, potem w data_dir."""
+    """Znajduje plik danych — najpierw w biezacym katalogu, potem w data_dir.
+
+    Dla lotow w nowym formacie (22+) dane dostarczane sa jako plik zbiorczy
+    ARTEMIDA_<NN>_AGG.txt (patrz aggregate_flight_data.py). Gdy skrypt prosi
+    o stary schemat ARTEMIDA_<NN>_LOT.txt, a go nie ma, podstawiamy plik AGG,
+    dzieki czemu wszystkie skrypty analizy dzialaja bez zmian.
+    """
     p = Path(name)
     if p.exists():
         return p
     alt = get_data_dir() / name
     if alt.exists():
         return alt
+
+    # Fallback: ARTEMIDA_<NN>_LOT.txt -> ARTEMIDA_<NN>_AGG.txt
+    m = re.fullmatch(r"ARTEMIDA_(\d+)_LOT\.txt", Path(name).name)
+    if m:
+        agg = f"ARTEMIDA_{m.group(1)}_AGG.txt"
+        for cand in (Path(agg), get_data_dir() / agg):
+            if cand.exists():
+                return cand
+
     return p   # zwroc oryginalna (zglosi blad pozniej)
 
 
@@ -159,12 +182,27 @@ def detect_delimiter(filepath):
     return None   # whitespace (split())
 
 
+def is_aggregated_format(filepath):
+    """Czy plik jest zbiorczy (nowy format, loty 22+) — po znaczniku w 1. linii."""
+    try:
+        with open(filepath, encoding="utf-8", errors="replace") as f:
+            return f.readline().rstrip("\n\r") == AGG_FORMAT_MARKER
+    except OSError:
+        return False
+
+
 def parse_telemetry(filepath, verbose=True):
     """
     Parsuje plik telemetrii. Zwraca obiekt Telemetry.
     Obsluguje rozna kolejnosc kolumn przez mapowanie po nazwach.
+
+    Automatycznie rozpoznaje nowy format zbiorczy (loty 22+) i wczytuje go
+    bez korekt osi/lat-lon (dane sa juz w poprawnej orientacji).
     """
     filepath = Path(filepath)
+    if is_aggregated_format(filepath):
+        return _parse_aggregated(filepath, verbose=verbose)
+
     delim = detect_delimiter(filepath)
     with open(filepath, encoding="utf-8", errors="replace") as f:
         if delim is None:
@@ -251,6 +289,104 @@ def parse_telemetry(filepath, verbose=True):
         lat=_lat_col, lon=_lon_col,
         flag_flight=col("flag_flight"),
         n_samples=len(raw_rows), dt_mean=dt_mean,
+        raw_columns=raw_columns,
+    )
+
+
+def _parse_aggregated(filepath, verbose=True):
+    """
+    Wczytuje plik zbiorczy nowego formatu (ARTEMIDA_<NN>_AGG.txt).
+
+    Dane sa juz w poprawnej orientacji fizycznej — NIE stosujemy korekt
+    SWAP_GYRO_YZ ani zamiany lat/lon. Kolumny kanoniczne mapowane sa wprost
+    na pola Telemetry; pelny zestaw kanalow (w tym nadmiarowe czujniki)
+    dostepny jest w raw_columns pod oryginalnymi nazwami z pliku.
+    """
+    filepath = Path(filepath)
+    meta = []
+    header = None
+    rows = []
+    with open(filepath, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.rstrip("\n\r")
+            if line.startswith("#"):
+                meta.append(line)
+                continue
+            if header is None:
+                header = line.split("\t")
+                continue
+            if line.strip():
+                rows.append(line.split("\t"))
+
+    if header is None:
+        raise ValueError(f"{filepath.name}: brak wiersza naglowka")
+
+    str_cols = {"faza_lotu"}
+    cols = {}
+    for j, name in enumerate(header):
+        if name in str_cols:
+            cols[name] = np.array(
+                [r[j] if j < len(r) else "" for r in rows], dtype=object)
+        else:
+            vals = np.empty(len(rows), dtype=float)
+            for i, r in enumerate(rows):
+                try:
+                    vals[i] = float(r[j])
+                except (ValueError, IndexError):
+                    vals[i] = np.nan
+            cols[name] = vals
+
+    def g(name):
+        return cols.get(name, np.full(len(rows), np.nan))
+
+    time = g("time_s")
+    dt = np.diff(time)
+    dt_mean = float(np.median(dt)) if len(dt) else float("nan")
+
+    # Flaga "w locie": z fazy lotu, awaryjnie z flagi startu / znaku czasu
+    faza = cols.get("faza_lotu")
+    airborne = {"WZNOSZENIE", "SPADOCHRON_ZADANY", "OPADANIE", "PO_STARCIE"}
+    if faza is not None:
+        flag_flight = np.array([1.0 if str(v) in airborne else 0.0 for v in faza])
+    elif "flaga_startu" in cols:
+        flag_flight = (np.nan_to_num(g("flaga_startu")) >= 0.5).astype(float)
+    else:
+        flag_flight = (time >= 0).astype(float)
+
+    # raw_columns: wszystkie kolumny pliku + aliasy znormalizowane dla zgodnosci
+    raw_columns = dict(cols)
+    raw_columns.update({
+        "time": time,
+        "acc_x": g("acc_x_g"), "acc_y": g("acc_y_g"), "acc_z": g("acc_z_g"),
+        "gyro_x": g("gyro_x_degps"), "gyro_y": g("gyro_y_degps"),
+        "gyro_z": g("gyro_z_degps"),
+        "alt": g("alt_msl_m"), "vel": g("vel_horiz_ms"),
+        "press_cham": g("press_chamber_bar"),
+        "lat": g("lat_deg"), "lon": g("lon_deg"),
+        "mag_y": g("mag_x_G"),
+        "flag_flight": flag_flight,
+    })
+
+    if verbose:
+        nmod = sum(1 for ln in meta if ln.startswith("#   "))
+        print(f"Sparsowano (format zbiorczy): {filepath.name}")
+        print(f"  Kolumny: {len(header)}  Probek: {len(rows)}")
+        if len(time):
+            print(f"  Czas: {time[0]:.3f}s do {time[-1]:.3f}s  "
+                  f"Krok: {dt_mean:.4f}s ({1/dt_mean:.0f} Hz)")
+        print(f"  Moduly zrodlowe: {nmod}  "
+              f"[bez korekt osi — dane w poprawnej orientacji]")
+
+    return Telemetry(
+        time=time,
+        acc_x=g("acc_x_g"), acc_y=g("acc_y_g"), acc_z=g("acc_z_g"),
+        gyro_x=g("gyro_x_degps"), gyro_y=g("gyro_y_degps"),
+        gyro_z=g("gyro_z_degps"),
+        alt_onboard=g("alt_msl_m"), vel_onboard=g("vel_horiz_ms"),
+        press_cham=g("press_chamber_bar"), press_amb=np.full(len(rows), np.nan),
+        lat=g("lat_deg"), lon=g("lon_deg"),
+        flag_flight=flag_flight,
+        n_samples=len(rows), dt_mean=dt_mean,
         raw_columns=raw_columns,
     )
 
