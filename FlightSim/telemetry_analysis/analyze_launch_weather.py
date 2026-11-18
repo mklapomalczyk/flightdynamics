@@ -34,7 +34,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from telemetry_parser import get_data_dir
+from telemetry_parser import get_data_dir, read_config_rows
 
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 HOURLY_VARS = [
@@ -54,16 +54,10 @@ def read_flights(base):
     """Parsuje configs.txt — kolumny date (dd.mm.yyyy), time (hh.mm),
     azimuth, T/p/Rh zmierzone na ziemi. Zwraca liste dict."""
     cfg_path = Path(base) / "configs.txt"
-    lines = open(cfg_path, encoding="utf-8", errors="replace").readlines()
-    header = [h.strip() for h in lines[0].strip().split("\t")]
     rows = []
-    for line in lines[1:]:
-        parts = [p.strip() for p in line.strip().split("\t")]
-        if len(parts) < len(header):
-            continue
-        row = dict(zip(header, parts))
+    for row in read_config_rows(str(cfg_path)):
         try:
-            fno = int(row["flight no"])
+            fno = int(str(row.get("flight no", "")).strip())
         except (ValueError, KeyError):
             continue
         if "date" not in row or "time" not in row or not row["date"] or not row["time"]:

@@ -62,6 +62,74 @@ def resolve_data_file(name):
     return p   # zwroc oryginalna (zglosi blad pozniej)
 
 
+# ===========================================================================
+# Odporne czytanie configs.txt (wspolne dla skryptow analizy)
+# ===========================================================================
+def read_config_rows(config_path="configs.txt"):
+    """
+    Czyta configs.txt odpornie i zwraca liste wierszy jako dict (klucz=naglowek).
+
+    Odporne na typowe problemy przy recznej edycji:
+      - wiersz KROTSZY niz naglowek (brak kolumn koncowych, np. masy/pogoda)
+        — brakujace kolumny dopelniane pustymi polami, zamiast pomijac wiersz;
+      - wiersz rozdzielony SPACJAMI zamiast tabulatorami — gdy brak tabulatorow,
+        dzielony po bialych znakach (wartosci w configs sa jednowyrazowe);
+      - puste linie pomijane; biale znaki obcinane.
+
+    Zwraca [] gdy pliku nie ma. Naglowek zawsze dzielony po tabulatorach.
+    """
+    p = resolve_data_file(config_path)
+    if not p.exists():
+        return []
+    with open(p, encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+    if not lines:
+        return []
+    header = [h.strip() for h in lines[0].rstrip("\n\r").split("\t")]
+    rows = []
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        parts = [x.strip() for x in line.rstrip("\n\r").split("\t")]
+        if len(parts) < 2:                       # brak tabulatorow -> biale znaki
+            parts = line.split()
+        if len(parts) < len(header):             # dopelnij brakujace kolumny
+            parts = parts + [""] * (len(header) - len(parts))
+        rows.append(dict(zip(header, parts)))
+    return rows
+
+
+def _cfg_float(row, key, default):
+    try:
+        return float(str(row.get(key, "")).strip())
+    except (ValueError, TypeError):
+        return default
+
+
+def load_flight_config(flight_no, config_path="configs.txt"):
+    """
+    Zwraca konfiguracje danego lotu z configs.txt (azymut, elewacja, cant,
+    glowica, masy) lub None gdy nie znaleziono. Odporne na niepelne wiersze.
+    """
+    for row in read_config_rows(config_path):
+        try:
+            fno = int(str(row.get("flight no", "")).strip())
+        except (ValueError, TypeError):
+            continue
+        if fno == flight_no:
+            return {
+                "cant":      _cfg_float(row, "cant angle", 0.0),
+                "head":      str(row.get("head configuration", "?")).strip(),
+                "azimuth":   _cfg_float(row, "azimuth", 0.0),
+                "elevation": _cfg_float(row, "elevation", 45.0),
+                "m_empty":   _cfg_float(row, "m_empty", float("nan")),
+                "m_full":    _cfg_float(row, "m_full", float("nan")),
+                "m_rocket":  _cfg_float(row, "m_rocket", float("nan")),
+                "row":       row,
+            }
+    return None
+
+
 # Mapowanie: znormalizowana nazwa -> mozliwe naglowki w pliku
 # Klucze sa odporne na drobne roznice w nazwach kolumn
 COLUMN_ALIASES = {

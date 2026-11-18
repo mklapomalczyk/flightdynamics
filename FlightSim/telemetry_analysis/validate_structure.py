@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from telemetry_parser import (COLUMN_ALIASES, _build_column_map,
                               resolve_data_file, get_data_dir,
-                              detect_delimiter)
+                              detect_delimiter, read_config_rows)
 
 
 # Kluczowe kolumny wymagane do rekonstrukcji IMU
@@ -137,31 +137,20 @@ def validate_file(filepath, reference_header=None, verbose=True):
 
 
 def load_flights_to_analyze(config_path="configs.txt"):
-    """Wczytuje numery lotow oznaczone 'yes' w configs.txt."""
+    """Wczytuje numery lotow oznaczone 'yes' w configs.txt (odporny czytnik)."""
     flights = []
-    p = resolve_data_file(config_path)
-    if not p.exists():
-        print(f"[WARN] Brak {config_path}")
+    rows = read_config_rows(config_path)
+    if not rows:
+        print(f"[WARN] Brak lub pusty {config_path}")
         return flights
-    with open(p, encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
-    header = lines[0].strip().split("\t")
-    # Znajdz kolumne "to analyze?"
-    analyze_col = None
-    for i, h in enumerate(header):
-        if "analyze" in h.lower():
-            analyze_col = i
-            break
-    fno_col = 0  # "flight no" zwykle pierwsza
-    for line in lines[1:]:
-        parts = line.strip().split("\t")
-        if len(parts) <= max(fno_col, analyze_col or 0):
-            continue
+    # Znajdz nazwe kolumny "to analyze?"
+    analyze_key = next((k for k in rows[0] if "analyze" in k.lower()), None)
+    for row in rows:
         try:
-            fno = int(parts[fno_col])
-        except ValueError:
+            fno = int(str(row.get("flight no", "")).strip())
+        except (ValueError, TypeError):
             continue
-        if analyze_col is not None and parts[analyze_col].strip().lower() == "yes":
+        if analyze_key and str(row.get(analyze_key, "")).strip().lower() == "yes":
             flights.append(fno)
     return flights
 

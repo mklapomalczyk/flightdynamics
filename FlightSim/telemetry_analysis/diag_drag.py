@@ -36,7 +36,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from telemetry_parser import parse_telemetry, resolve_data_file, get_data_dir
+from telemetry_parser import (parse_telemetry, resolve_data_file, get_data_dir,
+                              read_config_rows)
 from imu_reconstruction import detect_ignition
 
 G0    = 9.80665
@@ -55,17 +56,11 @@ def load_config(fno, base=None):
             break
     else:
         return None
-    lines = open(p, encoding="utf-8", errors="replace").readlines()
-    header = [h.strip() for h in lines[0].strip().split("\t")]
-    for line in lines[1:]:
-        parts = [x.strip() for x in line.strip().split("\t")]
-        if len(parts) < len(header):
-            continue
-        row = dict(zip(header, parts))
+    for row in read_config_rows(str(p)):
         try:
-            if int(row.get("flight no", -1)) != fno:
+            if int(str(row.get("flight no", "")).strip()) != fno:
                 continue
-        except ValueError:
+        except (ValueError, TypeError):
             continue
         def f(k, default=0.0):
             try: return float(row.get(k, default))

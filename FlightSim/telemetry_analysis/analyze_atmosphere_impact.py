@@ -40,7 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from telemetry_parser import get_data_dir
+from telemetry_parser import get_data_dir, read_config_rows
 from datcom_io.config_reader import load_config
 from datcom_io.rocket_builder import build_mass_model, build_propulsion, build_geometry, build_initial_state
 from models.atmosphere import create_atmosphere
@@ -57,16 +57,10 @@ def read_flight_atmosphere(base):
     """Parsuje configs.txt — kolumny T [C], p [hpa], Rh [%] per lot.
     Zwraca liste dict: fno, nose, T_C, p_hpa, RH_pct, analyze."""
     cfg_path = Path(base) / "configs.txt"
-    lines = open(cfg_path, encoding="utf-8", errors="replace").readlines()
-    header = [h.strip() for h in lines[0].strip().split("\t")]
     rows = []
-    for line in lines[1:]:
-        parts = [p.strip() for p in line.strip().split("\t")]
-        if len(parts) < len(header):
-            continue
-        row = dict(zip(header, parts))
+    for row in read_config_rows(str(cfg_path)):
         try:
-            fno = int(row["flight no"])
+            fno = int(str(row.get("flight no", "")).strip())
         except (ValueError, KeyError):
             continue
 

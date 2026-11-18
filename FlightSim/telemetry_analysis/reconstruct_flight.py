@@ -14,38 +14,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from telemetry_parser import parse_telemetry, resolve_data_file, get_data_dir
+from telemetry_parser import (parse_telemetry, resolve_data_file, get_data_dir,
+                              load_flight_config)
 from imu_reconstruction import (calibrate, initial_orientation,
                                 reconstruct, detect_ignition, G0)
 from gps_fusion import fuse_imu_gps, latlon_to_enu
 
 
 def load_config(flight_no, config_path="configs.txt"):
-    """Wczytuje azymut i elewacje z configs.txt dla danego lotu."""
-    cfg = {}
-    p = resolve_data_file(config_path)
-    if not p.exists():
-        return None
-    with open(p, encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
-    header = lines[0].strip().split("\t")
-    for line in lines[1:]:
-        parts = line.strip().split("\t")
-        if len(parts) < len(header):
-            continue
-        row = dict(zip(header, parts))
-        try:
-            fno = int(row.get("flight no", -1))
-        except ValueError:
-            continue
-        if fno == flight_no:
-            return {
-                "cant":      float(row.get("cant angle", 0)),
-                "head":      row.get("head configuration", "?"),
-                "azimuth":   float(row.get("azimuth", 0)),
-                "elevation": float(row.get("elevation", 45)),
-            }
-    return None
+    """Wczytuje azymut i elewacje z configs.txt dla danego lotu.
+
+    Delegacja do wspolnego, odpornego czytnika (telemetry_parser) — radzi sobie
+    z niepelnymi wierszami i rozdzieleniem spacjami zamiast tabulatorami.
+    """
+    return load_flight_config(flight_no, config_path)
 
 
 def detect_flight_window(tel):

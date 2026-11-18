@@ -23,7 +23,8 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from telemetry_parser import parse_telemetry, resolve_data_file, get_data_dir
+from telemetry_parser import (parse_telemetry, resolve_data_file, get_data_dir,
+                              read_config_rows)
 from imu_reconstruction import (calibrate, initial_orientation, reconstruct,
                                 detect_ignition)
 from gps_fusion import fuse_imu_gps, latlon_to_enu
@@ -34,22 +35,12 @@ RESULTS_DIR = get_data_dir() / "results"
 
 
 def load_config_row(flight_no, config_path="configs.txt"):
-    """Wczytuje pelny wiersz konfiguracji dla lotu."""
-    p = resolve_data_file(config_path)
-    if not p.exists():
-        return None
-    with open(p, encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
-    header = lines[0].strip().split("\t")
-    for line in lines[1:]:
-        parts = line.strip().split("\t")
-        if len(parts) < len(header):
-            continue
-        row = dict(zip(header, parts))
+    """Wczytuje pelny wiersz konfiguracji dla lotu (odporny czytnik)."""
+    for row in read_config_rows(config_path):
         try:
-            if int(row.get("flight no", -1)) == flight_no:
+            if int(str(row.get("flight no", "")).strip()) == flight_no:
                 return row
-        except ValueError:
+        except (ValueError, TypeError):
             continue
     return None
 

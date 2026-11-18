@@ -31,7 +31,7 @@ from pathlib import Path
 import os
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from telemetry_parser import parse_telemetry, get_data_dir
+from telemetry_parser import parse_telemetry, get_data_dir, read_config_rows
 from diag_drag import load_config, isa, detect_events, analyze as diag_analyze, S
 from imu_reconstruction import detect_ignition
 import fit_cd_mach as fcm
@@ -47,17 +47,10 @@ def read_configs(base):
     if not cfg_path.exists():
         raise FileNotFoundError(f"configs.txt not found in {base}")
 
-    lines = open(cfg_path, encoding="utf-8", errors="replace").readlines()
-    header = [h.strip() for h in lines[0].strip().split("\t")]
-
     rows = []
-    for line in lines[1:]:
-        parts = [p.strip() for p in line.strip().split("\t")]
-        if len(parts) < len(header):
-            continue
-        row = dict(zip(header, parts))
+    for row in read_config_rows(str(cfg_path)):
         try:
-            fno = int(row["flight no"])
+            fno = int(str(row.get("flight no", "")).strip())
         except (ValueError, KeyError):
             continue
 
