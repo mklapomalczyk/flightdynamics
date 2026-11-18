@@ -86,15 +86,23 @@ def read_config_rows(config_path="configs.txt"):
     if not lines:
         return []
     header = [h.strip() for h in lines[0].rstrip("\n\r").split("\t")]
+    ncol = len(header)
     rows = []
     for line in lines[1:]:
         if not line.strip():
             continue
         parts = [x.strip() for x in line.rstrip("\n\r").split("\t")]
-        if len(parts) < 2:                       # brak tabulatorow -> biale znaki
-            parts = line.split()
-        if len(parts) < len(header):             # dopelnij brakujace kolumny
-            parts = parts + [""] * (len(header) - len(parts))
+        # Niespojne separatory: wiersz moze mieszac tabulatory i spacje (recznie
+        # dopisane loty). Gdy podzial po tabulatorach nie daje tylu kolumn co
+        # naglowek, dzielimy po dowolnych bialych znakach — wartosci w configs sa
+        # jednowyrazowe (data/czas/liczby/ostra/yes), wiec to bezpieczne. Czysty
+        # wiersz z pustymi komorkami (dokladnie ncol pol po tabulatorach) zostaje.
+        if len(parts) != ncol:
+            ws = line.split()
+            if len(ws) > len(parts):
+                parts = ws
+        if len(parts) < ncol:                    # dopelnij brakujace kolumny
+            parts = parts + [""] * (ncol - len(parts))
         rows.append(dict(zip(header, parts)))
     return rows
 
