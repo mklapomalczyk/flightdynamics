@@ -22,7 +22,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from telemetry_parser import (COLUMN_ALIASES, _build_column_map,
                               resolve_data_file, get_data_dir,
-                              detect_delimiter, read_config_rows)
+                              detect_delimiter, read_config_rows,
+                              is_aggregated_format, parse_telemetry)
 
 
 # Kluczowe kolumny wymagane do rekonstrukcji IMU
@@ -76,6 +77,50 @@ def count_rows_and_rate(filepath):
     return n_rows, rate, t_span
 
 
+def _validate_aggregated(filepath, result, verbose=True):
+    """Walidacja pliku zbiorczego (nowy format) przez parser."""
+    import numpy as np
+    tel = parse_telemetry(filepath, verbose=False)
+    present = {
+        "time": tel.time, "acc_x": tel.acc_x, "acc_y": tel.acc_y,
+        "acc_z": tel.acc_z, "gyro_x": tel.gyro_x, "gyro_y": tel.gyro_y,
+        "gyro_z": tel.gyro_z,
+    }
+    opt = {"lat": tel.lat, "lon": tel.lon, "alt": tel.alt_onboard,
+           "vel": tel.vel_onboard, "press_cham": tel.press_cham,
+           "flag_flight": tel.flag_flight}
+
+    def _absent(a):
+        return a is None or (hasattr(a, "size") and
+                             (a.size == 0 or np.all(np.isnan(a.astype(float)))
+                              if a.dtype.kind == "f" else False))
+
+    result["missing_required"] = [k for k, v in present.items() if _absent(v)]
+    result["missing_optional"] = [k for k, v in opt.items() if _absent(v)]
+    # liczba kolumn = pelen zestaw kanalow w pliku zbiorczym
+    result["n_columns"] = len(tel.raw_columns)
+    result["n_rows"] = tel.n_samples
+    result["rate_hz"] = (1.0 / tel.dt_mean) if tel.dt_mean else None
+    result["t_span"] = (float(tel.time[0]), float(tel.time[-1])) if tel.n_samples else None
+    result["column_order_match"] = None
+    result["ok"] = (len(result["missing_required"]) == 0)
+
+    if verbose:
+        status = "OK" if result["ok"] else "PROBLEM"
+        print(f"  [{status}] {filepath.name}  [format zbiorczy]")
+        rate = result["rate_hz"]
+        print(f"      kanaly={result['n_columns']}  wiersze={result['n_rows']}  "
+              f"czestotliwosc={rate:.0f}Hz" if rate else "      (brak czasu)")
+        if result["t_span"]:
+            print(f"      czas: {result['t_span'][0]:.2f}s do {result['t_span'][1]:.2f}s")
+        if result["missing_required"]:
+            print(f"      ! BRAK kluczowych: {result['missing_required']}")
+        if result["missing_optional"]:
+            print(f"      ~ brak opcjonalnych: {result['missing_optional']} "
+                  f"(np. lot bez GPS/MGLO)")
+    return result
+
+
 def validate_file(filepath, reference_header=None, verbose=True):
     """
     Waliduje pojedynczy plik. Zwraca slownik z wynikami.
@@ -98,6 +143,12 @@ def validate_file(filepath, reference_header=None, verbose=True):
         if verbose:
             print(f"  [BRAK PLIKU] {filepath.name}")
         return result
+
+    # Nowy format zbiorczy (loty 22+): inna struktura — walidujemy przez parser,
+    # ktory mapuje kanoniczne kolumny na pola Telemetry. Nie porownujemy kolejnosci
+    # kolumn z referencja starego formatu.
+    if is_aggregated_format(filepath):
+        return _validate_aggregated(filepath, result, verbose)
 
     header = read_header(filepath)
     col_map = _build_column_map(header)
@@ -171,8 +222,10 @@ def main():
     results = []
     reference_header = None
     for fno in flight_nos:
-        fname = data_dir / f"ARTEMIDA_{fno}_LOT.txt"
-        if reference_header is None and fname.exists():
+        fname = resolve_data_file(f"ARTEMIDA_{fno}_LOT.txt")
+        # Referencja kolejnosci kolumn tylko ze starego formatu (zbiorczy ma inna strukture)
+        if (reference_header is None and fname.exists()
+                and not is_aggregated_format(fname)):
             reference_header = read_header(fname)
             print(f"\nReferencja kolumn: {fname.name} ({len(reference_header)} kolumn)\n")
         res = validate_file(fname, reference_header)
