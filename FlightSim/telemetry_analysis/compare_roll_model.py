@@ -35,11 +35,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from telemetry_parser import (parse_telemetry, resolve_data_file,
                               read_config_rows, load_flight_config)
-from imu_reconstruction import (detect_ignition, calibrate,
-                                initial_orientation, reconstruct)
+from imu_reconstruction import detect_ignition
 from analyze_spin_cant import (load_model_roll, MODEL_RUNS, isa_rho,
                                isa_sound_speed, extract_spin, detect_burnout,
-                               _smooth, D_REF, S_REF, RESULTS)
+                               axial_speed, _smooth, D_REF, S_REF, RESULTS)
 
 IXX_FULL = 0.0032      # roll [kg·m²] przed wypaleniem (yaml)
 IXX_EMPTY = 0.0028     # roll [kg·m²] po wypaleniu (yaml)
@@ -71,28 +70,33 @@ def model_roll_interpolators():
     return cll_of, clp_of, (float(mach.min()), float(mach.max()))
 
 
+def _gps_speed(tel):
+    """Całkowita prędkość z GPS [m/s] (3 składowe, inaczej prędkość pokładowa)."""
+    vN = tel.raw_columns.get("vel_north_ms")
+    if vN is not None:
+        return np.sqrt(np.nan_to_num(vN) ** 2
+                       + np.nan_to_num(tel.raw_columns.get("vel_east_ms")) ** 2
+                       + np.nan_to_num(tel.raw_columns.get("vel_down_ms")) ** 2)
+    v = tel.raw_columns.get("vel")
+    return v if v is not None else tel.vel_onboard
+
+
 def flight_envelope(tel, t_ign, t_end, fno):
-    """V(t), alt(t) z rekonstrukcji IMU na siatce tel.time (NaN poza oknem)."""
-    cfg = load_flight_config(fno)
-    az = cfg["azimuth"] if cfg else 90.0
-    el = cfg["elevation"] if cfg else 45.0
-    try:
-        cal = calibrate(tel, t_rest_end=-1.0)
-        q0 = initial_orientation(cal, az, el)
-        traj = reconstruct(tel, cal, q0, t_start=t_ign, t_end=t_end)
-        V = np.interp(tel.time, traj.time, traj.speed, left=np.nan, right=np.nan)
-        alt = np.interp(tel.time, traj.time, traj.alt, left=np.nan, right=np.nan)
-        return V, alt
-    except Exception as e:
-        print(f"  [env] rekonstrukcja nieudana ({e}) — GPS")
-        vN = tel.raw_columns.get("vel_north_ms")
-        if vN is not None:
-            V = np.sqrt(np.nan_to_num(vN) ** 2
-                        + np.nan_to_num(tel.raw_columns.get("vel_east_ms")) ** 2
-                        + np.nan_to_num(tel.raw_columns.get("vel_down_ms")) ** 2)
-        else:
-            V = tel.raw_columns.get("vel", tel.vel_onboard)
-        return V, tel.alt_onboard
+    """
+    Obwiednia V(t), alt(t). BLEND: całka osiowa acc_x na ciągu (GPS tam zaniża
+    V), GPS w wybiegu (acc_x tam dryfuje za nisko; rekonstrukcja 3D — za wysoko).
+    Przejście płynne w oknie [t_bo, t_bo+2 s].
+    """
+    t = tel.time
+    Vgps = _smooth(_gps_speed(tel), 25)
+    Vax = axial_speed(tel, t_ign)
+    if Vax is None:
+        return Vgps, tel.alt_onboard
+    # V = max(acc_x, GPS): na ciągu GPS zaniża -> wygrywa acc_x; w wybiegu acc_x
+    # dryfuje za nisko -> wygrywa GPS. Punkt przecięcia dobiera się sam.
+    good = np.isfinite(Vgps) & (Vgps > 10) & (t > t_ign)
+    V = np.where(good, np.maximum(Vax, Vgps), Vax)
+    return V, tel.alt_onboard
 
 
 def integrate_roll(t, V, alt, cant, t_ign, t_bo, t_end, cll_of, clp_of,
