@@ -43,12 +43,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from telemetry_parser import (parse_telemetry, resolve_data_file, get_data_dir,
                               read_config_rows, load_flight_config)
-from imu_reconstruction import (detect_ignition, calibrate,
-                                initial_orientation, reconstruct)
+from imu_reconstruction import detect_ignition
 
-D_REF = 0.070          # średnica odniesienia [m]
+G0 = 9.80665
+
+D_REF = 0.070                      # średnica odniesienia [m]
+S_REF = np.pi * D_REF ** 2 / 4.0   # pole odniesienia [m²]
+IXX_COAST = 0.0028                 # moment bezwładności roll (po wypaleniu) [kg·m²] (yaml)
 R_AIR = 287.05
 RESULTS = get_data_dir() / "results"
+
+# Przebiegi DATCOM dla modelu roll vs cant
+MODEL_RUNS = {0.0: "cant0p000", 0.6: "cant0p600", 1.6: "cant1p600"}
 
 
 # --------------------------------------------------------------------------
@@ -56,6 +62,13 @@ def isa_sound_speed(h_m):
     """Prędkość dźwięku wg ISA (troposfera) [m/s]. h w [m ASL]."""
     T = 288.15 - 0.0065 * np.clip(h_m, 0.0, 20000.0)
     return np.sqrt(1.4 * R_AIR * T)
+
+
+def isa_rho(h_m):
+    """Gęstość powietrza wg ISA [kg/m³]."""
+    T = 288.15 - 0.0065 * np.clip(h_m, 0.0, 20000.0)
+    p = 101325.0 * (T / 288.15) ** 5.2561
+    return p / (R_AIR * T)
 
 
 def ax_channel(tel):
@@ -176,21 +189,27 @@ def mag_spin_check(tel, t0, t1):
 
 
 # --------------------------------------------------------------------------
-def reconstruct_speed(tel, t_ign, t_end, fno):
+def axial_speed(tel, t_ign):
     """
-    Prędkość i wysokość z rekonstrukcji IMU (nie z GPS — ten zaniża V w fazie
-    napędowej). Zwraca (time, speed, alt) na siatce rekonstrukcji lub None.
+    Prędkość osiowa z integracji akcelerometru X (°/s → m/s).
+
+    Akcelerometr mierzy siłę właściwą; w spoczynku acc_x = rzut grawitacji na oś
+    (= acc_x_rest). Przy ~stałej orientacji we WCZESNEJ fazie (napęd/wczesny
+    wybieg) inercjalne przyspieszenie osiowe = (acc_x − acc_x_rest)·g0, więc
+    v_osiowa(t) = ∫ od zapłonu. Wiarygodne tylko na początku lotu — używamy go
+    w oknie okołowypaleniowym (tam GPS zaniża V).
     """
-    cfg = load_flight_config(fno)
-    az = cfg["azimuth"] if cfg else 90.0
-    el = cfg["elevation"] if cfg else 45.0
-    try:
-        cal = calibrate(tel, t_rest_end=-1.0)
-        q0 = initial_orientation(cal, az, el)
-        traj = reconstruct(tel, cal, q0, t_start=t_ign, t_end=t_end)
-        return traj.time, traj.speed, traj.alt
-    except Exception:
+    acc = tel.acc_x
+    if acc is None:
         return None
+    rest = tel.time < (t_ign - 0.5)
+    bias = np.nanmean(acc[rest]) if np.any(rest) else 0.0
+    a = np.nan_to_num((acc - bias) * G0)
+    a[tel.time < t_ign] = 0.0
+    dt = np.diff(tel.time, prepend=tel.time[0])
+    v = np.cumsum(a * dt)
+    v[tel.time < t_ign] = 0.0
+    return v
 
 
 def analyze_flight(fno, cant, nose, verbose=True):
@@ -199,6 +218,7 @@ def analyze_flight(fno, cant, nose, verbose=True):
     rec = dict(fno=fno, cant=cant, nose=nose, source=None, V_src=None,
                t_ign=np.nan, t_bo=np.nan, p_peak=np.nan, V_bo=np.nan,
                mach=np.nan, pd2V=np.nan, tau_coast=np.nan, tau_r2=np.nan,
+               mach_coast=np.nan, clp_meas=np.nan,
                mag_spin=np.nan, mag_ch=None)
     if not fname.exists():
         if verbose:
@@ -221,18 +241,19 @@ def analyze_flight(fno, cant, nose, verbose=True):
     else:
         t_apo = float(t[-1])
 
-    # Prędkość/wysokość z rekonstrukcji IMU (wiarygodne w fazie napędowej)
-    V = Valt = None
-    rc = reconstruct_speed(tel, t_ign, t_apo, fno) if ok else None
-    if rc is not None:
-        tr, sp, al = rc
-        V = np.interp(t, tr, sp, left=np.nan, right=np.nan)
-        Valt = np.interp(t, tr, al, left=np.nan, right=np.nan)
-        rec["V_src"] = "IMU"
+    # Prędkość osiowa z akcelerometru X (wiarygodna we wczesnej fazie; GPS zaniża
+    # V w fazie napędowej). Wysokość do prędkości dźwięku — z GPS, inaczej start.
+    V = axial_speed(tel, t_ign)
+    if V is not None:
+        rec["V_src"] = "accX"
     else:
         V = total_speed(tel)
-        Valt = alt_gps
         rec["V_src"] = "GPS"
+    if alt_gps is not None and np.any(np.isfinite(alt_gps)):
+        Valt = alt_gps
+    else:
+        a0 = alt_gps[np.isfinite(alt_gps)] if alt_gps is not None else None
+        Valt = np.full_like(t, a0[0] if a0 is not None and len(a0) else 200.0)
 
     t_bo = detect_burnout(tel, t_ign)
     if ok:
@@ -259,9 +280,25 @@ def analyze_flight(fno, cant, nose, verbose=True):
                 rec["mach"] = float(np.nanmedian(
                     V[win] / isa_sound_speed(Valt[win])))
 
-        # tłumienie: zanik w wybiegu
+        # tłumienie: zanik spinu w wybiegu -> stała czasowa τ
         tau, p0, r2 = coast_decay_tau(t, ps, t_bo, t_apo)
         rec["tau_coast"], rec["tau_r2"] = tau, r2
+
+        # zmierzone Clp z zaniku: Ixx·dp/dt = ¼ρV·S·d²·Clp·p  ⇒
+        #   Clp = −4·Ixx / (ρ·V·S·d²·τ).  V i wysokość w wybiegu z GPS (tam GPS OK).
+        if np.isfinite(tau) and tau > 0:
+            Vg = total_speed(tel)
+            cwin = (t > t_bo + 0.3) & (t < min(t_bo + 6.0, t_apo)) & np.isfinite(Vg)
+            if Vg is not None and np.sum(cwin) > 10:
+                Vc = float(np.nanmedian(Vg[cwin]))
+                hc = (float(np.nanmedian(alt_gps[cwin]))
+                      if alt_gps is not None and np.any(np.isfinite(alt_gps[cwin]))
+                      else 500.0)
+                if Vc > 20:
+                    rho = isa_rho(hc)
+                    rec["mach_coast"] = Vc / isa_sound_speed(hc)
+                    rec["clp_meas"] = -4.0 * IXX_COAST / (
+                        rho * Vc * S_REF * D_REF ** 2 * tau)
 
     # kontrola magnetometrem (okno okołowypaleniowe)
     if not np.isnan(rec["t_bo"]):
@@ -291,6 +328,72 @@ def fit_cant(records, nose="ostra"):
     return dict(nose=nose, slope=float(slope), intercept=float(inter),
                 r2=float(ss), n=len(rows),
                 cants=sorted(set(cant.tolist())))
+
+
+def load_model_roll():
+    """Wczytuje tabele DATCOM (CLL, Clp) dla cant 0/0.6/1.6. Zwraca dict lub {}."""
+    import pickle
+    base = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(base))               # pkl potrzebuje modułu 'models'
+    tabs = {}
+    for cant, name in MODEL_RUNS.items():
+        p = base / "datcom_runs" / f"rocket_70mm_baseline_{name}" / "aero_table_missile.pkl"
+        if p.exists():
+            try:
+                tabs[cant] = pickle.load(open(p, "rb"))
+            except Exception as e:
+                print(f"  [model] nie wczytano {name}: {e}")
+    return tabs
+
+
+def model_calibration(records, fit_meas):
+    """
+    Porównanie z DATCOM i propozycja kalibracji:
+      - nachylenie p·d/2V vs cant (pomiar vs model)  -> niedoszacowanie spinu,
+      - Clp (pomiar z τ vs model analityczny)        -> Clp_scale,
+      - Clδ (napęd)                                   -> CLL_scale.
+    Zwraca dict z wynikami (lub None).
+    """
+    tabs = load_model_roll()
+    if len(tabs) < 2 or fit_meas is None:
+        return None
+    t0 = tabs[0.0]
+    i0 = int(np.argmin(np.abs(t0.alpha_table)))     # alpha = 0
+    mach = t0.mach_table
+
+    def model_CLL(cant, m):
+        return float(np.interp(m, mach, np.abs(tabs[cant].CLL_table[i0, :])))
+
+    def model_Clp(m):
+        return float(np.interp(m, mach, np.abs(t0.Clp_table[i0, :])))
+
+    # reprezentatywny Mach wybiegu (mediana z lotów)
+    mc = np.array([r["mach_coast"] for r in records if np.isfinite(r["mach_coast"])])
+    m_rep = float(np.median(mc)) if len(mc) else 0.4
+
+    # model: nachylenie p·d/2V vs cant[deg] = (dCLL/dcant)/Clp  (wartości bezwzgl.)
+    cants = np.array(sorted(MODEL_RUNS))
+    cll = np.array([model_CLL(c, m_rep) for c in cants])
+    A = np.vstack([cants, np.ones_like(cants)]).T
+    dCLL_dc = float(np.linalg.lstsq(A, cll, rcond=None)[0][0])     # per deg
+    clp_model = model_Clp(m_rep)
+    slope_model = dCLL_dc / clp_model                              # per deg
+
+    slope_meas = abs(fit_meas["slope"])                           # per deg
+    # Clp: średnia z lotów (wartości bezwzględne)
+    clp_m = np.array([abs(r["clp_meas"]) for r in records if np.isfinite(r["clp_meas"])])
+    clp_meas_mean = float(np.mean(clp_m)) if len(clp_m) else np.nan
+
+    clp_scale = clp_meas_mean / clp_model if np.isfinite(clp_meas_mean) else np.nan
+    spin_factor = slope_meas / slope_model
+    # slope = CLL/Clp  =>  CLL_scale = spin_factor * clp_scale
+    cll_scale = spin_factor * clp_scale if np.isfinite(clp_scale) else np.nan
+
+    return dict(m_rep=m_rep, slope_meas=slope_meas, slope_model=slope_model,
+                spin_factor=spin_factor, clp_model=clp_model,
+                clp_meas=clp_meas_mean, clp_scale=clp_scale,
+                dCLL_dc_model=dCLL_dc, cll_scale=cll_scale,
+                n_clp=len(clp_m))
 
 
 def save_plots(records, fit_ostra):
@@ -375,6 +478,25 @@ def main(argv=None):
         print(f"  R²={fit_o['r2']:.3f}  n={fit_o['n']}  cant={fit_o['cants']}")
     else:
         print("  za mało punktów")
+
+    cal = model_calibration(records, fit_o)
+    if cal:
+        print("\n" + "=" * 60)
+        print("Porównanie z DATCOM + propozycja kalibracji (ostra)")
+        print("=" * 60)
+        print(f"  Mach reprezentatywny (wybieg): {cal['m_rep']:.2f}")
+        print(f"  nachylenie p·d/2V vs cant:  pomiar={cal['slope_meas']:.4f}  "
+              f"model={cal['slope_model']:.4f}  /deg")
+        print(f"  -> spin niedoszacowany przez model x{cal['spin_factor']:.1f}")
+        print(f"  Clp (tłumienie):  pomiar={cal['clp_meas']:.3f}  "
+              f"model={cal['clp_model']:.3f}   (n={cal['n_clp']})")
+        print(f"  -> Clp_scale = {cal['clp_scale']:.2f}  "
+              f"(model {'przetłumia' if cal['clp_scale']<1 else 'niedotłumia'})")
+        print(f"  Clδ (napęd):  CLL_scale = {cal['cll_scale']:.2f}")
+        print(f"\n  PROPOZYCJA (zakres: Mach {np.nanmin([r['mach_coast'] for r in records if np.isfinite(r['mach_coast'])]):.1f}"
+              f"–{cal['m_rep']:.1f}, cant 0–1.6°, ostra):")
+        print(f"    Clp_scale ≈ {cal['clp_scale']:.2f}   CLL_scale ≈ {cal['cll_scale']:.2f}")
+        print(f"    (do weryfikacji po budowie modelu AMS/RMS)")
 
     RESULTS.mkdir(exist_ok=True)
     csv_path = RESULTS / "spin_cant_summary.csv"
