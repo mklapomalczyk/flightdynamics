@@ -15,6 +15,13 @@ Z lotu wyciągamy TRZY rzeczy, każdą z właściwego fragmentu przebiegu:
   3. p·d/2V (bezwymiarowo)        — vs cant i Mach; nachylenie dopasowania po
      cant daje stosunek Clδ/Clp, wyraz wolny „a" — niesymetrię wykonania.
 
+Wniosek (patrz compare_roll_model.py)
+-------------------------------------
+Identyfikowalny jest TYLKO stosunek CLL/Clp (model zaniża go ~4×). Czas
+narastania (ostry pik przy wypaleniu) wyklucza obniżanie Clp, więc korekta =
+NAPĘD: CLL_scale ≈ 4, Clp_scale ≈ 1. τ z wybiegu NIE jest czystym tłumieniem
+(stateczniki napędzają roll także w wybiegu) i służy tu tylko jako diagnostyka.
+
 Źródło spinu
 ------------
 Kanał AX / RXO ("Prędkość obrotowa AX [st./s]") jest PRZELICZONY do °/s i SIĘ
@@ -348,11 +355,18 @@ def load_model_roll():
 
 def model_calibration(records, fit_meas):
     """
-    Porównanie z DATCOM i propozycja kalibracji:
-      - nachylenie p·d/2V vs cant (pomiar vs model)  -> niedoszacowanie spinu,
-      - Clp (pomiar z τ vs model analityczny)        -> Clp_scale,
-      - Clδ (napęd)                                   -> CLL_scale.
-    Zwraca dict z wynikami (lub None).
+    Porównanie z DATCOM i propozycja kalibracji.
+
+    Identyfikowalny jest TYLKO stosunek CLL/Clp (poziom równowagi p·d/2V) — spin
+    jest w quasi-równowadze. Czas narastania (ostry pik przy wypaleniu) wyklucza
+    OBNIŻANIE Clp (potrzeba szybkiej równowagi), więc niedoszacowanie ~4× trzeba
+    złożyć na NAPĘD CLL, nie na tłumienie:
+
+      CLL_scale = p·d/2V(pomiar) / [CLL(cant,M)/Clp(M)](model),  Clp trzymane = model.
+
+    τ z „zaniku" w wybiegu podajemy tylko jako DIAGNOSTYKĘ — nie jest to czyste
+    tłumienie (stateczniki napędzają roll także w wybiegu), więc NIE używamy go
+    jako Clp_scale (to był błąd wcześniejszej wersji).
     """
     tabs = load_model_roll()
     if len(tabs) < 2 or fit_meas is None:
@@ -360,40 +374,47 @@ def model_calibration(records, fit_meas):
     t0 = tabs[0.0]
     i0 = int(np.argmin(np.abs(t0.alpha_table)))     # alpha = 0
     mach = t0.mach_table
+    cants_model = sorted(tabs)
+    cll_grid = {c: np.abs(tabs[c].CLL_table[i0, :]) for c in cants_model}
 
     def model_CLL(cant, m):
-        return float(np.interp(m, mach, np.abs(tabs[cant].CLL_table[i0, :])))
+        col = [np.interp(m, mach, cll_grid[c]) for c in cants_model]
+        return float(np.interp(cant, cants_model, col))
 
     def model_Clp(m):
         return float(np.interp(m, mach, np.abs(t0.Clp_table[i0, :])))
 
-    # reprezentatywny Mach wybiegu (mediana z lotów)
-    mc = np.array([r["mach_coast"] for r in records if np.isfinite(r["mach_coast"])])
-    m_rep = float(np.median(mc)) if len(mc) else 0.4
+    def model_pd2V(cant, m):
+        clp = model_Clp(m)
+        return model_CLL(cant, m) / clp if clp > 0 else np.nan
 
-    # model: nachylenie p·d/2V vs cant[deg] = (dCLL/dcant)/Clp  (wartości bezwzgl.)
-    cants = np.array(sorted(MODEL_RUNS))
-    cll = np.array([model_CLL(c, m_rep) for c in cants])
-    A = np.vstack([cants, np.ones_like(cants)]).T
-    dCLL_dc = float(np.linalg.lstsq(A, cll, rcond=None)[0][0])     # per deg
-    clp_model = model_Clp(m_rep)
-    slope_model = dCLL_dc / clp_model                              # per deg
+    # CLL_scale per lot (Clp = model): o ile trzeba zwiększyć napęd
+    for r in records:
+        r["cll_scale"] = np.nan
+        if (r["nose"] == "ostra" and r["cant"] > 0
+                and np.isfinite(r["pd2V"]) and np.isfinite(r["mach"])):
+            mp = model_pd2V(r["cant"], r["mach"])
+            if mp and mp > 0:
+                r["cll_scale"] = r["pd2V"] / mp
+    cs = np.array([r["cll_scale"] for r in records if np.isfinite(r["cll_scale"])])
+    cll_scale = float(np.mean(cs)) if len(cs) else np.nan
+    cll_std = float(np.std(cs)) if len(cs) else np.nan
 
-    slope_meas = abs(fit_meas["slope"])                           # per deg
-    # Clp: średnia z lotów (wartości bezwzględne)
-    clp_m = np.array([abs(r["clp_meas"]) for r in records if np.isfinite(r["clp_meas"])])
-    clp_meas_mean = float(np.mean(clp_m)) if len(clp_m) else np.nan
-
-    clp_scale = clp_meas_mean / clp_model if np.isfinite(clp_meas_mean) else np.nan
+    # identyfikowalny czynnik spinu (nachylenie pomiar/model)
+    m_rep = float(np.median([r["mach"] for r in records if np.isfinite(r["mach"])]))
+    slope_meas = abs(fit_meas["slope"])
+    dCLL_dc = float(np.polyfit(np.array(cants_model, float),
+                               [model_CLL(c, m_rep) for c in cants_model], 1)[0])
+    slope_model = dCLL_dc / model_Clp(m_rep)
     spin_factor = slope_meas / slope_model
-    # slope = CLL/Clp  =>  CLL_scale = spin_factor * clp_scale
-    cll_scale = spin_factor * clp_scale if np.isfinite(clp_scale) else np.nan
+
+    # diagnostyka: efektywne Clp z τ (UWAGA: podtrzymywane napędem — nie Clp_scale)
+    clp_m = np.array([abs(r["clp_meas"]) for r in records if np.isfinite(r["clp_meas"])])
+    clp_eff = float(np.mean(clp_m)) if len(clp_m) else np.nan
 
     return dict(m_rep=m_rep, slope_meas=slope_meas, slope_model=slope_model,
-                spin_factor=spin_factor, clp_model=clp_model,
-                clp_meas=clp_meas_mean, clp_scale=clp_scale,
-                dCLL_dc_model=dCLL_dc, cll_scale=cll_scale,
-                n_clp=len(clp_m))
+                spin_factor=spin_factor, cll_scale=cll_scale, cll_std=cll_std,
+                n_cll=len(cs), clp_model=model_Clp(m_rep), clp_eff=clp_eff)
 
 
 def save_plots(records, fit_ostra):
@@ -487,16 +508,20 @@ def main(argv=None):
         print(f"  Mach reprezentatywny (wybieg): {cal['m_rep']:.2f}")
         print(f"  nachylenie p·d/2V vs cant:  pomiar={cal['slope_meas']:.4f}  "
               f"model={cal['slope_model']:.4f}  /deg")
-        print(f"  -> spin niedoszacowany przez model x{cal['spin_factor']:.1f}")
-        print(f"  Clp (tłumienie):  pomiar={cal['clp_meas']:.3f}  "
-              f"model={cal['clp_model']:.3f}   (n={cal['n_clp']})")
-        print(f"  -> Clp_scale = {cal['clp_scale']:.2f}  "
-              f"(model {'przetłumia' if cal['clp_scale']<1 else 'niedotłumia'})")
-        print(f"  Clδ (napęd):  CLL_scale = {cal['cll_scale']:.2f}")
-        print(f"\n  PROPOZYCJA (zakres: Mach {np.nanmin([r['mach_coast'] for r in records if np.isfinite(r['mach_coast'])]):.1f}"
-              f"–{cal['m_rep']:.1f}, cant 0–1.6°, ostra):")
-        print(f"    Clp_scale ≈ {cal['clp_scale']:.2f}   CLL_scale ≈ {cal['cll_scale']:.2f}")
-        print(f"    (do weryfikacji po budowie modelu AMS/RMS)")
+        print(f"  -> stosunek CLL/Clp niedoszacowany x{cal['spin_factor']:.1f} "
+              f"(to jest identyfikowalne)")
+        print(f"  Podział (z czasu narastania — pik przy wypaleniu, szybka "
+              f"równowaga):")
+        print(f"    napęd  CLL_scale ≈ {cal['cll_scale']:.1f} ± {cal['cll_std']:.1f}  "
+              f"(n={cal['n_cll']})")
+        print(f"    tłumienie  Clp_scale ≈ 1  (Clp ~ model; NIE obniżać)")
+        print(f"  [diagnostyka] efektywne Clp z τ = {cal['clp_eff']:.2f} vs model "
+              f"{cal['clp_model']:.2f} — zaniżone, bo w wybiegu spin jest "
+              f"podtrzymywany napędem (to NIE jest Clp_scale)")
+        print(f"\n  PROPOZYCJA (zakres: Mach ~0.4–1.0, cant 0–1.6°, ostra):")
+        print(f"    CLL_scale ≈ {cal['cll_scale']:.1f}   Clp_scale ≈ 1")
+        print(f"    (zweryfikowane czasowo w compare_roll_model.py; "
+              f"do finalnej weryfikacji po AMS/RMS)")
 
     RESULTS.mkdir(exist_ok=True)
     csv_path = RESULTS / "spin_cant_summary.csv"
