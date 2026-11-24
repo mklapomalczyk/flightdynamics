@@ -43,7 +43,7 @@ fins:
     root_chord:   0.120     # cięciwa nasady [m]
     tip_chord:    0.081     # cięciwa końca [m]
     sweep_le:     35.0      # kąt skosu krawędzi natarcia [deg]
-    cant_angle:   1.2       # kąt zaklinowania płetw [deg]
+    cant_angle:   0.0       # kąt zaklinowania płetw [deg]
     thickness:    0.002     # grubość płetwy [m]
     profile:      hex       # hex | naca | wedge
 

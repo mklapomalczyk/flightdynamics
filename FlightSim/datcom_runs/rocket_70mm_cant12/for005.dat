@@ -1,0 +1,39 @@
+DIM M
+
+ $FLTCON  NALPHA=11.,NMACH=9.,
+          MACH=0.1000,0.2000,0.3000,0.4000,0.8000,0.9000,1.0000,1.1000,2.3000,
+          ALPHA=-10.0,-8.0,-6.0,-4.0,-2.0,0.0,2.0,4.0,6.0,8.0,10.0,$
+
+ $REFQ    XCG=0.7100,
+          SREF=0.0038485,
+          LREF=0.0700,
+          RHR=0.,$
+
+ $AXIBOD  X0=0.00,
+          TNOSE=OGIVE,
+          LNOSE=0.2250,
+          DNOSE=0.0700,
+          BNOSE=0.0,
+          TRUNC=.FALSE.,
+          LCENTR=1.0160,
+          DCENTR=0.0700,
+          TAFT=CONE,
+          LAFT=0.0440,
+          DAFT=0.0520,
+          DEXIT=0.0000,$
+
+ $FINSET1 XLE=1.1600,1.2003,NPANEL=4.,
+          SSPAN=0.0350,0.0925,
+          CHORD=0.1200,0.0810,
+          LER=2*0.0,
+          PHIF=0.0,90.0,180.0,270.0,
+          SECTYP=HEX,
+          ZUPPER=0.025000,0.025000,
+          LMAXU=0.4,0.4,
+          LFLATU=0.2,0.2,$
+
+ $DEFLCT  DELTA1=1.2000,1.2000,1.2000,1.2000,
+          XHINGE=1.2500,$
+
+PART
+NEXT CASE
