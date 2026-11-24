@@ -36,8 +36,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from telemetry_parser import parse_telemetry, resolve_data_file, read_config_rows
 from imu_reconstruction import detect_ignition
-from analyze_spin_cant import (axial_speed, _smooth, extract_spin, detect_burnout,
-                               isa_sound_speed, D_REF, get_data_dir)
+from analyze_spin_cant import (_smooth, extract_spin, detect_burnout,
+                               D_REF, get_data_dir)
 from compare_roll_model import model_roll_interpolators, integrate_roll
 from gps_fusion import fused_speed
 
