@@ -337,20 +337,52 @@ def fit_cant(records, nose="ostra"):
                 cants=sorted(set(cant.tolist())))
 
 
+def _run_lref(run_dir):
+    """Odczytuje LREF z echa datcom.out (lub None)."""
+    out = run_dir / "datcom.out"
+    if not out.exists():
+        return None
+    try:
+        for line in open(out, encoding="utf-8", errors="replace"):
+            if "LREF=" in line:
+                return float(line.split("LREF=")[1].split(",")[0])
+    except (ValueError, OSError):
+        pass
+    return None
+
+
 def load_model_roll():
-    """Wczytuje tabele DATCOM (CLL, Clp) dla cant 0/0.6/1.6. Zwraca dict lub {}."""
+    """
+    Wczytuje tabele DATCOM (CLL, Clp) dla cant 0/0.6/1.6.
+
+    UWAGA: sprawdza LREF. Biegi cant z LREF ≠ średnica (sprzed poprawki LREF —
+    było: długość kadłuba) są PRZESTARZAŁE: współczynniki roll są znormalizowane
+    inną długością odniesienia niż p·d/2V, więc porównanie z pomiarem jest
+    NIEWIARYGODNE. Zwraca (tabs, stale) — stale=True gdy którykolwiek bieg zły.
+    """
     import pickle
     base = Path(__file__).resolve().parent.parent
     sys.path.insert(0, str(base))               # pkl potrzebuje modułu 'models'
     tabs = {}
+    stale = False
     for cant, name in MODEL_RUNS.items():
-        p = base / "datcom_runs" / f"rocket_70mm_baseline_{name}" / "aero_table_missile.pkl"
+        run_dir = base / "datcom_runs" / f"rocket_70mm_baseline_{name}"
+        p = run_dir / "aero_table_missile.pkl"
         if p.exists():
             try:
                 tabs[cant] = pickle.load(open(p, "rb"))
             except Exception as e:
                 print(f"  [model] nie wczytano {name}: {e}")
-    return tabs
+                continue
+            lref = _run_lref(run_dir)
+            if lref is not None and abs(lref - D_REF) > 0.05 * D_REF:
+                stale = True
+    if stale:
+        print("  [model] *** OSTRZEŻENIE: biegi DATCOM cant mają LREF ≠ średnica "
+              f"(≈1.285 m zamiast {D_REF} m) — PRZESTARZAŁE.")
+        print("  [model]     Porównanie CLL/Clp z modelem jest NIEWIARYGODNE "
+              "do czasu regeneracji biegów cant (DATCOM, LREF=średnica).")
+    return tabs, stale
 
 
 def model_calibration(records, fit_meas):
@@ -368,7 +400,7 @@ def model_calibration(records, fit_meas):
     tłumienie (stateczniki napędzają roll także w wybiegu), więc NIE używamy go
     jako Clp_scale (to był błąd wcześniejszej wersji).
     """
-    tabs = load_model_roll()
+    tabs, stale = load_model_roll()
     if len(tabs) < 2 or fit_meas is None:
         return None
     t0 = tabs[0.0]
@@ -414,7 +446,8 @@ def model_calibration(records, fit_meas):
 
     return dict(m_rep=m_rep, slope_meas=slope_meas, slope_model=slope_model,
                 spin_factor=spin_factor, cll_scale=cll_scale, cll_std=cll_std,
-                n_cll=len(cs), clp_model=model_Clp(m_rep), clp_eff=clp_eff)
+                n_cll=len(cs), clp_model=model_Clp(m_rep), clp_eff=clp_eff,
+                stale=stale)
 
 
 def save_plots(records, fit_ostra):
@@ -505,6 +538,11 @@ def main(argv=None):
         print("\n" + "=" * 60)
         print("Porównanie z DATCOM + propozycja kalibracji (ostra)")
         print("=" * 60)
+        if cal.get("stale"):
+            print("  !!! WYNIK NIEWIARYGODNY: tabele DATCOM cant są przestarzałe "
+                  "(zły LREF).")
+            print("  !!! Zregeneruj biegi cant (LREF=średnica) przed ufaniem "
+                  "poniższym skalom.\n")
         print(f"  Mach reprezentatywny (wybieg): {cal['m_rep']:.2f}")
         print(f"  nachylenie p·d/2V vs cant:  pomiar={cal['slope_meas']:.4f}  "
               f"model={cal['slope_model']:.4f}  /deg")

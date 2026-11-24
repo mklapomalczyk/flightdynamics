@@ -47,7 +47,10 @@ IXX_EMPTY = 0.0028     # roll [kg·m²] po wypaleniu (yaml)
 
 def model_roll_interpolators():
     """CLL(cant,Mach) i Clp(Mach) przy alpha=0, wartości bezwzględne. Zwraca fn."""
-    tabs = load_model_roll()
+    tabs, stale = load_model_roll()
+    if stale:
+        print("  !!! UWAGA: tabele DATCOM cant przestarzałe (zły LREF) — krzywa "
+              "modelu NIEWIARYGODNA (do regeneracji biegów cant).")
     if len(tabs) < 2:
         return None, None, None
     t0 = tabs[0.0]
