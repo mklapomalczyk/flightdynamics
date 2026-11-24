@@ -70,33 +70,20 @@ def model_roll_interpolators():
     return cll_of, clp_of, (float(mach.min()), float(mach.max()))
 
 
+from gps_fusion import fused_speed, gps_speed_direct
+
+
 def _gps_speed(tel):
-    """Całkowita prędkość z GPS [m/s] (3 składowe, inaczej prędkość pokładowa)."""
-    vN = tel.raw_columns.get("vel_north_ms")
-    if vN is not None:
-        return np.sqrt(np.nan_to_num(vN) ** 2
-                       + np.nan_to_num(tel.raw_columns.get("vel_east_ms")) ** 2
-                       + np.nan_to_num(tel.raw_columns.get("vel_down_ms")) ** 2)
-    v = tel.raw_columns.get("vel")
-    return v if v is not None else tel.vel_onboard
+    """|prędkość| z bezpośrednich pól GPS [m/s] (alias dla gps_speed_direct)."""
+    return gps_speed_direct(tel)
 
 
 def flight_envelope(tel, t_ign, t_end, fno):
     """
-    Obwiednia V(t), alt(t). BLEND: całka osiowa acc_x na ciągu (GPS tam zaniża
-    V), GPS w wybiegu (acc_x tam dryfuje za nisko; rekonstrukcja 3D — za wysoko).
-    Przejście płynne w oknie [t_bo, t_bo+2 s].
+    Obwiednia V(t), alt(t) z fuzji komplementarnej acc_x + bezpośredni GPS
+    (gps_fusion.fused_speed): pik przy wypaleniu z acc_x, wybieg/opadanie z GPS.
     """
-    t = tel.time
-    Vgps = _smooth(_gps_speed(tel), 25)
-    Vax = axial_speed(tel, t_ign)
-    if Vax is None:
-        return Vgps, tel.alt_onboard
-    # V = max(acc_x, GPS): na ciągu GPS zaniża -> wygrywa acc_x; w wybiegu acc_x
-    # dryfuje za nisko -> wygrywa GPS. Punkt przecięcia dobiera się sam.
-    good = np.isfinite(Vgps) & (Vgps > 10) & (t > t_ign)
-    V = np.where(good, np.maximum(Vax, Vgps), Vax)
-    return V, tel.alt_onboard
+    return fused_speed(tel, t_ign), tel.alt_onboard
 
 
 def integrate_roll(t, V, alt, cant, t_ign, t_bo, t_end, cll_of, clp_of,

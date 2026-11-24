@@ -111,6 +111,72 @@ def filter_gps_glitches(t_gps, e_gps, n_gps, u_gps,
     return valid
 
 
+def _smooth_med(x, n=25):
+    """Mediana ruchoma (odporna na szpilki)."""
+    n = max(3, int(n) | 1)
+    pad = n // 2
+    xp = np.pad(np.asarray(x, dtype=float), pad, mode="edge")
+    return np.array([np.nanmedian(xp[i:i + n]) for i in range(len(x))])
+
+
+def gps_speed_direct(tel):
+    """|prędkość| z BEZPOŚREDNICH pól GPS (doppler) [m/s], inaczej prędkość pokładowa."""
+    vN = tel.raw_columns.get("vel_north_ms")
+    if vN is not None:
+        vE = tel.raw_columns.get("vel_east_ms")
+        vD = tel.raw_columns.get("vel_down_ms")
+        return np.sqrt(np.nan_to_num(vN) ** 2 + np.nan_to_num(vE) ** 2
+                       + np.nan_to_num(vD) ** 2)
+    v = tel.raw_columns.get("vel")
+    return v if v is not None else tel.vel_onboard
+
+
+def fused_speed(tel, t_ign, acc_gate=3.0, alpha=0.08, reject_ratio=0.6, G0=9.80665):
+    """
+    Skalarna prędkość z fuzji komplementarnej acc_x + BEZPOŚREDNI GPS (doppler).
+
+    Problem: GPS-doppler zaniża/przycina prędkość w fazie napędowej i tuż po
+    wypaleniu (duża dynamika), a całka osiowego akcelerometru jest dobra na
+    ciągu, ale dryfuje (nie jest prędkością CAŁKOWITĄ) w dłuższym wybiegu.
+
+    Rozwiązanie: v = całka(acc_x − baseline), korygowana do GPS filtrem
+    komplementarnym TYLKO gdy GPS wiarygodny:
+      - przyspieszenie osiowe < acc_gate [g]  (faza balistyczna), ORAZ
+      - v_gps nie jest absurdalnie niższe od estymaty (> reject_ratio·v) —
+        odrzuca przycięcie dopplera tuż po wypaleniu.
+    Dzięki temu: pik przy wypaleniu z acc_x, wybieg/opadanie z GPS. Lepsze niż
+    max(acc,GPS) (płynne) i niż rekonstrukcja 3D (ta dryfuje wysoko).
+
+    Zwraca tablicę prędkości [m/s] na siatce tel.time.
+    """
+    t = tel.time
+    acc = tel.acc_x
+    rest = t < (t_ign - 0.5)
+    bias = np.nanmean(acc[rest]) if np.any(rest) else 0.0
+    a = np.nan_to_num((acc - bias) * G0)
+    a[t < t_ign] = 0.0
+    dt = np.diff(t, prepend=t[0])
+    v_imu = np.cumsum(a * dt)            # całka osiowa (dobra na ciągu)
+    v_gps = _smooth_med(gps_speed_direct(tel), 25)
+
+    # koniec ciągu: ostatnia chwila z |acc| > gate w pierwszych ~6 s po zapłonie.
+    # GPS-doppler potrzebuje ~post_delay, by dojść do siebie po dużej dynamice —
+    # do tego czasu pik prędkości trzymamy wyłącznie z acc_x.
+    boost = (t > t_ign) & (t < t_ign + 6.0) & (np.abs(acc) > acc_gate)
+    t_boost_end = float(t[np.where(boost)[0][-1]]) if np.any(boost) else t_ign
+    post_delay = 1.5
+
+    drift = 0.0
+    vf = np.zeros_like(t)
+    for k in range(len(t)):
+        vf[k] = max(v_imu[k] - drift, 0.0)
+        if (t[k] > t_boost_end + post_delay and abs(acc[k]) < acc_gate
+                and np.isfinite(v_gps[k]) and v_gps[k] > 5.0
+                and v_gps[k] > reject_ratio * vf[k]):
+            drift += alpha * (vf[k] - v_gps[k])
+    return vf
+
+
 def fuse_imu_gps(traj, tel, t_ign,
                  alpha_pos=0.01, alpha_vel=0.005,
                  acc_gate=3.0):

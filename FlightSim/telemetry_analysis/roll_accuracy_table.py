@@ -38,23 +38,15 @@ from telemetry_parser import parse_telemetry, resolve_data_file, read_config_row
 from imu_reconstruction import detect_ignition
 from analyze_spin_cant import (axial_speed, _smooth, extract_spin, detect_burnout,
                                isa_sound_speed, D_REF, get_data_dir)
-from compare_roll_model import (model_roll_interpolators, integrate_roll,
-                                _gps_speed)
+from compare_roll_model import model_roll_interpolators, integrate_roll
+from gps_fusion import fused_speed
 
 RESULTS = get_data_dir() / "results"
 
 
 def full_envelope(tel, t_ign, t_apo):
-    """V(t) na cały lot: max(acc_x,GPS) do apogeum, GPS w opadaniu."""
-    t = tel.time
-    Vgps = _smooth(_gps_speed(tel), 25)
-    Vax = axial_speed(tel, t_ign)
-    good = np.isfinite(Vgps) & (Vgps > 5) & (t > t_ign)
-    if Vax is None:
-        return np.where(good, Vgps, np.nan)
-    V = np.where(good, np.maximum(Vax, Vgps), Vax)         # ciąg+coast
-    V = np.where((t >= t_apo) & good, Vgps, V)             # opadanie -> GPS
-    return V
+    """V(t) na cały lot z fuzji komplementarnej acc_x + bezpośredni GPS."""
+    return fused_speed(tel, t_ign)
 
 
 def detect_impact(tel, t_ign, t_apo):
