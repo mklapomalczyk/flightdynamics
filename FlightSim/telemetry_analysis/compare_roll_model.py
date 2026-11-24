@@ -88,7 +88,11 @@ def flight_envelope(tel, t_ign, t_end, fno):
 
 def integrate_roll(t, V, alt, cant, t_ign, t_bo, t_end, cll_of, clp_of,
                    cll_scale, clp_scale):
-    """Całkuje p(t) [rad/s] równania rolki przy danej obwiedni i skalach."""
+    """Całkuje p(t) [rad/s] równania rolki przy danej obwiedni i skalach.
+
+    (Uwaga: opóźnienie zejścia z prowadnicy sprawdzono — nie zmienia wyniku,
+    bo model równoważy się w ~0.05 s i „zapomina" moment startu; lag narastania
+    to efekt stałej czasowej, nie przesunięcia startu.)"""
     p = np.zeros_like(t)
     i0 = int(np.searchsorted(t, t_ign))
     iend = int(np.searchsorted(t, t_end))
