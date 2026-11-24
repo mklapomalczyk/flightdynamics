@@ -60,8 +60,10 @@ IXX_COAST = 0.0028                 # moment bezwładności roll (po wypaleniu) [
 R_AIR = 287.05
 RESULTS = get_data_dir() / "results"
 
-# Przebiegi DATCOM dla modelu roll vs cant
-MODEL_RUNS = {0.0: "cant0p000", 0.6: "cant0p600", 1.6: "cant1p600"}
+# Przebiegi DATCOM dla modelu roll vs cant (LREF=średnica — poprawne).
+# cant=0 -> bieg bazowy (CLL=0); reszta -> osobne biegi cant.
+MODEL_RUNS = {0.0: "rocket_70mm_baseline", 0.6: "rocket_70mm_cant06",
+              1.2: "rocket_70mm_cant12", 1.6: "rocket_70mm_cant16"}
 
 
 # --------------------------------------------------------------------------
@@ -366,7 +368,7 @@ def load_model_roll():
     tabs = {}
     stale = False
     for cant, name in MODEL_RUNS.items():
-        run_dir = base / "datcom_runs" / f"rocket_70mm_baseline_{name}"
+        run_dir = base / "datcom_runs" / name
         p = run_dir / "aero_table_missile.pkl"
         if p.exists():
             try:

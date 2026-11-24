@@ -186,8 +186,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("flights", nargs="*", type=int)
-    ap.add_argument("--clp-scale", type=float, default=0.25)
-    ap.add_argument("--cll-scale", type=float, default=1.0)
+    # Domyślna korekta (pkt 1, tabele DATCOM z poprawnym LREF): napęd ~4× za
+    # niski, tłumienie poprawne. Clp z DATCOM daje właściwy czas narastania.
+    ap.add_argument("--clp-scale", type=float, default=1.0)
+    ap.add_argument("--cll-scale", type=float, default=4.0)
     args = ap.parse_args(argv)
 
     cll_of, clp_of, mrange = model_roll_interpolators()
