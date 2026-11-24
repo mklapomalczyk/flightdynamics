@@ -69,8 +69,10 @@ def flight_points(t, p_meas, t_ign, t_apo, t_imp):
     idx = np.where(w)[0]
     imax = idx[int(np.nanargmax(p_meas[idx]))]
     t_max, p_max = t[imax], p_meas[imax]
-    rise = (t > t_ign) & (t < t_max) & (p_meas >= 0.5 * p_max)
-    t_half = float(t[np.where(rise)[0][0]]) if np.any(rise) else np.nan
+    # 50% narastania: OSTATNIA chwila poniżej 0.5·pik PRZED pikiem (na rampie).
+    # Szukanie od tyłu omija szpilkę zapłonową, która fałszywie wskazuje t_ign.
+    below = np.where((t > t_ign) & (t < t_max) & (p_meas < 0.5 * p_max))[0]
+    t_half = float(t[below[-1]]) if len(below) else np.nan
     return [("maks roll",   float(t_max)),
             ("1/2 narast.",  t_half),
             ("apogeum",      float(t_apo)),
@@ -171,13 +173,14 @@ def main(argv=None):
         print()
         all_rows.extend(rows)
 
-    # agregat dokładności: tylko wznoszenie (model ważny), po p·d/2V
+    # agregat dokładności: tylko wznoszenie, cant>0 (przy cant=0 model nie ma
+    # napędu — to regime niesymetrii „a", osobny człon, nie aero), po p·d/2V
     asc = [r for r in all_rows if r["phase"] == "wznoszenie"
-           and np.isfinite(r["ratio"])]
+           and r["cant"] > 0.01 and np.isfinite(r["ratio"])]
     if asc:
         err = np.array([abs(r["ratio"] - 1.0) for r in asc])
         print("=" * 56)
-        print(f"Dokładność na WZNOSZENIU (model ważny), n={len(asc)} punktów:")
+        print(f"Dokładność na WZNOSZENIU (cant>0, model ważny), n={len(asc)} punktów:")
         print(f"  średni |model/test − 1| = {100*np.mean(err):.0f}%   "
               f"mediana = {100*np.median(err):.0f}%")
         for lab in ("maks roll", "1/2 narast.", "apogeum"):
