@@ -6,3 +6,17 @@ __pycache__/
 # wykres do CWD przy kazdym uruchomieniu)
 FlightSim/test_3dof_vs_6dof.png
 /FlightSim/field_test_data/results
+FlightSim/field_test_data/results/spin_vs_cant.png
+FlightSim/field_test_data/results/spin_cant_summary.csv
+FlightSim/field_test_data/results/roll_model_vs_test_flight_25.png
+FlightSim/field_test_data/results/roll_model_vs_test_flight_24.png
+FlightSim/field_test_data/results/roll_model_vs_test_flight_22.png
+FlightSim/field_test_data/results/roll_model_vs_test_flight_21.png
+FlightSim/field_test_data/results/roll_model_vs_test_flight_20.png
+FlightSim/field_test_data/results/roll_model_vs_test_flight_19.png
+FlightSim/field_test_data/results/roll_model_vs_test_flight_18.png
+FlightSim/field_test_data/results/roll_model_vs_test_flight_17.png
+FlightSim/field_test_data/results/roll_model_vs_test_flight_16.png
+FlightSim/field_test_data/results/roll_model_vs_test_flight_15.png
+FlightSim/field_test_data/results/roll_model_vs_test_flight_14.png
+FlightSim/field_test_data/results/roll_model_vs_test_flight_13.png
