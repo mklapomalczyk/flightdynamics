@@ -46,6 +46,36 @@ IDX_RAIL_DIST = 13
 _ZERO3 = np.zeros(3)
 _ZERO3.flags.writeable = False
 
+# ===========================================================================
+# KALIBRACJA NAPĘDU TOCZENIA OD ZAKLINOWANIA PŁETW (CLL) — z walidacji lotowej
+# ===========================================================================
+# To JEDYNA korekta modelu wynikająca z walidacji telemetrii (reszta walidacji
+# potwierdziła model bez zmian: CD, Cm_α, Clp). DATCOM ZANIŻA moment toczący od
+# zaklinowania stateczników (CLL_table) ~4×. Mnożnik stosujemy WYŁĄCZNIE do
+# gałęzi DATCOM CLL_table poniżej — gałąź analityczna (strip-theory) już jest
+# zgodna z pomiarem i NIE jest skalowana.
+#
+# Skąd ×4 (patrz telemetry_analysis/NOTATKA_pkt1_roll.md oraz
+# Walidacja_modelu_6DOF_ARTEMIDA.docx, sekcja 4.1):
+#   - Bezwymiarowy spin równowagowy p·d/2V (niezmiennik geometr., niezależny od
+#     masy/prędkości) z lotów:  0.0103 /°  (R²=0.89, cant 0–1.6°, Mach 0.4–1.0).
+#   - Z tabel DATCOM (poprawny LREF = średnica):           0.0026 /°.
+#   - Stąd skala = pomiar / DATCOM = 0.0103 / 0.0026 ≈ 4.0.
+#   - Niezależny sprawdzian strip-theory (czysta geometria płetw, efektywność
+#     clα się skraca):  0.0092 /°  → ≈ 3.6× powyżej DATCOM — potwierdza, że
+#     pomiar jest fizyczny, a błąd leży w NAPĘDZIE (CLL), nie w tłumieniu (Clp,
+#     które DATCOM ma dobre, dlatego Clp NIE jest tu skalowane).
+#   - Rozrzut per lot: 2.3–4.6 (słaby, zaszumiony trend z Machem — strip-theory
+#     mówi że p·d/2V jest geometryczne, więc nie dopasowujemy skali(Mach)).
+# Prawdopodobna przyczyna zaniżenia w DATCOM: cant podawany jako wychylenie
+# steru (DELTA) o zredukowanej skuteczności klapy zamiast pełnej incydencji
+# zabudowanej płetwy.
+#
+# Wartość 4.0 odtwarza ZMIERZONY spin (pomiar/DATCOM); strip-theory (3.6) to
+# niezależna kontrola. Różnica mieści się w rozrzucie per-lot. Do aktualizacji
+# po kolejnych startach (więcej danych cant/Mach).
+CLL_CANT_CAL_SCALE = 4.0
+
 _RATE_KEYS = ("d_pitch_rate", "d_yaw_rate", "d_roll_rate")
 
 def _ctrl_xa_to_rates(xa, n_states):
@@ -247,11 +277,18 @@ class ForceModel6DOF:
         # ---- Moment toczący od zaklinowania płetw (z CLL_table DATCOM) ---- #
         MA_roll_cant = 0.0
         if hasattr(self.aero, 'CLL_table') and self.aero.CLL_table is not None:
-            # CLL z DATCOM — bezpośrednio moment toczący [-]
+            # CLL z DATCOM — bezpośrednio moment toczący [-].
+            # Korekta z walidacji lotowej: DATCOM zaniża CLL ~4× (patrz blok
+            # CLL_CANT_CAL_SCALE na górze pliku). Skalujemy TYLKO tę gałąź
+            # (DATCOM), bo gałąź analityczna/strip-theory niżej już odpowiada
+            # pomiarowi. Tłumienie Clp NIE jest skalowane (DATCOM je ma dobre).
             CLL = self.aero._interp(self.aero.CLL_table, alpha, mach)
-            MA_roll_cant = CLL * q_dyn * self.geom.S_ref * self.geom.d_ref
+            MA_roll_cant = (CLL * CLL_CANT_CAL_SCALE *
+                            q_dyn * self.geom.S_ref * self.geom.d_ref)
         elif self.geom.cant_angle_rad != 0.0 and speed > 1.0:
-            # Fallback — wzór analityczny gdy brak tabeli DATCOM
+            # Fallback — wzór analityczny (strip-theory) gdy brak tabeli DATCOM.
+            # NIE skalowany: ta postać już zgadza się z pomiarem (0.0092 vs
+            # 0.0103 /°, ~12%), bo strip-theory daje p·d/2V geometrycznie.
             CNA_fins     = getattr(self.geom, 'CNA_fins_ref', 0.2)
             r_fin_mid    = self.geom.d_ref / 2.0 + self.geom.span_ref / 2.0
             Cl_cant      = (self.geom.n_fins * CNA_fins *
